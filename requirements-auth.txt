@@ -1,0 +1,13 @@
+# Authentication system requirements
+# Core dependency for Tuya Cloud API access
+tuya-device-sharing-sdk>=0.2.0
+
+# Testing dependencies
+pytest>=7.0.0
+pytest-mock>=3.10.0
+
+# Development dependencies
+black>=22.0.0
+isort>=5.10.0
+flake8>=4.0.0
+mypy>=0.950
