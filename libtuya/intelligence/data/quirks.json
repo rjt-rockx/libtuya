@@ -1,0 +1,309 @@
+{
+  "description": "Device-specific quirks and edge cases from Home Assistant's Tuya integration",
+  "source": "Various platform files with special handling and notes",
+  "category_duplicates": {
+    "description": "Device categories that are mapped to other categories",
+    "mappings": {
+      "cz": "kg",
+      "pc": "kg", 
+      "dghsxj": "sp",
+      "tdq": "tgq"
+    },
+    "notes": "These are exact duplicates using LIGHTS['cz'] = LIGHTS['kg'] syntax"
+  },
+  "multi_entity_devices": {
+    "description": "Devices that create multiple entities with different DPCodes",
+    "examples": {
+      "tgkg": {
+        "name": "Dimmer Switch",
+        "entities": [
+          {"key": "switch_led_1", "brightness": "bright_value_1"},
+          {"key": "switch_led_2", "brightness": "bright_value_2"},
+          {"key": "switch_led_3", "brightness": "bright_value_3"}
+        ]
+      },
+      "sp": {
+        "name": "Smart Camera",
+        "entities": [
+          {"key": "floodlight_switch", "brightness": "floodlight_lightness"},
+          {"key": "basic_indicator", "type": "config"}
+        ]
+      }
+    }
+  },
+  "dpcode_fallbacks": {
+    "description": "Multiple DPCodes tried in order for same functionality",
+    "examples": {
+      "dj_brightness": "(DPCode.BRIGHT_VALUE_V2, DPCode.BRIGHT_VALUE)",
+      "dj_color_temp": "(DPCode.TEMP_VALUE_V2, DPCode.TEMP_VALUE)",
+      "dj_color_data": "(DPCode.COLOUR_DATA_V2, DPCode.COLOUR_DATA)",
+      "fsd_light_switch": "Try SWITCH_LED first, then LIGHT as fallback"
+    }
+  },
+  "undocumented_categories": {
+    "description": "Device categories not found in official Tuya documentation",
+    "categories": {
+      "mbd": "VECINO RGBW light - found in diagnostics",
+      "qjdcz": "Unknown product with light/switch capabilities in diffusers, plugs, PIR flood lights",
+      "hxd": "Wake Up Light II - not documented",
+      "tyd": "Outdoor Flood Light - not documented",
+      "dsd": "Filament Light - mentioned in OEM docs but not in main documentation",
+      "wkf": "Thermostatic Radiator Valve - not documented",
+      "dghsxj": "Smart Camera - Low power consumption camera",
+      "qxj": "SIREN with External Probe - undocumented category"
+    }
+  },
+  "brightness_scaling_quirks": {
+    "description": "Different brightness scaling ranges based on device type",
+    "ranges": {
+      "10_to_1000": "Common for newer devices",
+      "25_to_255": "Older devices or specific manufacturers",
+      "1_to_100": "Percentage-based devices"
+    },
+    "detection_logic": "Must check device capabilities JSON for actual min/max values"
+  },
+  "color_data_versions": {
+    "description": "Different color data formats and their usage",
+    "versions": {
+      "colour_data": "Original format with 255 max for saturation/value",
+      "colour_data_v2": "Newer format with 1000 max for saturation/value",
+      "colour_data_hsv": "HSV format used by some devices like humidifiers"
+    },
+    "default_ranges": {
+      "v1": {"h": "1-360", "s": "1-255", "v": "1-255"},
+      "v2": {"h": "1-360", "s": "1-1000", "v": "1-1000"}
+    }
+  },
+  "special_instruction_values": {
+    "description": "Non-standard instruction values for specific devices",
+    "examples": {
+      "mach_operate_curtain": {
+        "open": "FZ",
+        "close": "ZZ", 
+        "stop": "STOP"
+      },
+      "standard_curtain": {
+        "open": "open",
+        "close": "close",
+        "stop": "stop"
+      }
+    }
+  },
+  "climate_mode_mapping": {
+    "description": "Tuya HVAC modes mapped to Home Assistant modes",
+    "mappings": {
+      "auto": "heat_cool",
+      "cold": "cool",
+      "freeze": "cool",
+      "heat": "heat",
+      "hot": "heat",
+      "manual": "heat_cool",
+      "wet": "dry",
+      "wind": "fan_only"
+    }
+  },
+  "mireds_constants": {
+    "description": "Color temperature conversion constants",
+    "values": {
+      "MAX_MIREDS": 500,
+      "MIN_MIREDS": 153,
+      "corresponds_to": "2000K - 6500K range"
+    }
+  },
+  "device_specific_notes": {
+    "dj": "Some RGB lights also provide switch capability for plugs",
+    "fsd": "Ceiling fan lights may use either SWITCH_LED or LIGHT",
+    "kg": "Switch category covers both switches and sockets",
+    "sp": "Smart cameras have complex multi-entity configurations",
+    "cl": "Curtains support multiple controllers and different instruction formats"
+  },
+  "entity_category_usage": {
+    "description": "When entities are marked as CONFIG vs normal entities",
+    "config_entities": [
+      "switch_backlight",
+      "child_lock",
+      "basic_indicator",
+      "do_not_disturb",
+      "filter_reset",
+      "anion"
+    ],
+    "normal_entities": [
+      "switch_led", 
+      "switch",
+      "floodlight_switch"
+    ]
+  },
+  "multi_entity_pattern_recognition": {
+    "description": "Advanced multi-entity patterns identified from analysis data",
+    "common_combinations": {
+      "energy_monitoring": {
+        "entity_types": ["binary_sensor", "number", "select", "sensor", "switch"],
+        "frequency": 22,
+        "dps_patterns": {
+          "energy_dps_range": "100+",
+          "description": "Systematic DPS usage in 100+ range for energy monitoring",
+          "typical_mapping": {
+            "103": "voltage",
+            "104": "current", 
+            "105": "power",
+            "109": "total_energy",
+            "110": "energy_consumed"
+          },
+          "multi_phase_patterns": {
+            "phase_a_offset": 0,
+            "phase_b_offset": 10,
+            "phase_c_offset": 20,
+            "example": "DPS 103/104/105 for Phase A, DPS 113/114/115 for Phase B"
+          }
+        }
+      },
+      "complex_device_control": {
+        "entity_types": ["binary_sensor", "button", "number", "sensor", "switch"],
+        "frequency": 18,
+        "dps_patterns": {
+          "control_range": "1-20",
+          "config_range": "30+",
+          "description": "Complex devices with primary controls and configuration entities"
+        }
+      },
+      "lighting_control": {
+        "entity_types": ["light", "number", "select"],
+        "frequency": 17,
+        "dps_patterns": {
+          "light_dps_range": "20-26",
+          "description": "Advanced lighting with DPS 20-26 range patterns",
+          "typical_mapping": {
+            "20": "mode",
+            "21": "brightness",
+            "22": "color_temp",
+            "23": "color_data",
+            "24": "scene",
+            "25": "timer",
+            "26": "special_function"
+          }
+        }
+      },
+      "climate_monitoring": {
+        "entity_types": ["binary_sensor", "climate"],
+        "frequency": 16,
+        "dps_patterns": {
+          "climate_dps": "1-10",
+          "sensor_dps": "15-25",
+          "description": "Climate devices with binary sensor monitoring"
+        }
+      }
+    },
+    "multi_gang_patterns": {
+      "description": "Multi-gang switch and outlet patterns",
+      "switch_patterns": {
+        "2_gang": {
+          "switches": ["1", "2"],
+          "timers": ["9", "10"],
+          "config": ["38", "39"]
+        },
+        "3_gang": {
+          "switches": ["1", "2", "3"],
+          "timers": ["9", "10", "11"],
+          "config": ["38", "39", "40"]
+        },
+        "4_gang": {
+          "switches": ["1", "2", "3", "4"],
+          "timers": ["9", "10", "11", "12"],
+          "config": ["38", "39", "40", "41"]
+        },
+        "6_gang": {
+          "switches": ["1", "2", "3", "4", "5", "6"],
+          "timers": ["9", "10", "11", "12", "13", "14"],
+          "config": ["38", "39", "40", "41", "42", "43"]
+        }
+      },
+      "detection_algorithm": {
+        "step_1": "Count switch DPS in range 1-6",
+        "step_2": "Look for corresponding timer DPS in range 9-14",
+        "step_3": "Check for config DPS in range 38-43",
+        "confidence_threshold": 0.8
+      }
+    },
+    "fan_light_combos": {
+      "description": "Ceiling fan with light combinations",
+      "patterns": {
+        "standard_combo": {
+          "light_dps": "20-26",
+          "fan_dps": "60-65",
+          "timer_dps": "26",
+          "typical_mapping": {
+            "20": "light_switch",
+            "21": "light_brightness",
+            "22": "light_color_temp",
+            "60": "fan_switch",
+            "61": "fan_speed",
+            "62": "fan_direction",
+            "26": "timer"
+          }
+        }
+      }
+    },
+    "energy_monitoring_detailed": {
+      "description": "Systematic energy monitoring device patterns",
+      "single_phase": {
+        "voltage": ["103", "voltage_a", "voltage"],
+        "current": ["104", "current_a", "current"],
+        "power": ["105", "power_a", "power"],
+        "energy": ["109", "energy_a", "total_energy"],
+        "power_factor": ["110", "power_factor_a"]
+      },
+      "three_phase": {
+        "phase_a": {
+          "voltage": "103",
+          "current": "104", 
+          "power": "105",
+          "energy": "109"
+        },
+        "phase_b": {
+          "voltage": "113",
+          "current": "114",
+          "power": "115", 
+          "energy": "119"
+        },
+        "phase_c": {
+          "voltage": "123",
+          "current": "124",
+          "power": "125",
+          "energy": "129"
+        },
+        "totals": {
+          "total_power": "101",
+          "total_energy": "102"
+        }
+      }
+    }
+  },
+  "electrical_data_quirks": {
+    "description": "Special handling for electrical measurements",
+    "raw_decoding": {
+      "note": "Some devices provide raw electrical data that needs struct unpacking",
+      "voltage_scale": "Raw bytes 0-2, big-endian uint16, divide by 10",
+      "current_scale": "Raw bytes 2-5, big-endian uint24, divide by 1000", 
+      "power_scale": "Raw bytes 5-8, big-endian uint24, divide by 1000"
+    }
+  },
+  "dptype_correction": {
+    "description": "Cloud sometimes provides ill-formed DPTypes that need correction",
+    "mappings": {
+      "Bitmap": "RAW",
+      "bitmap": "RAW",
+      "bool": "BOOLEAN",
+      "enum": "ENUM",
+      "json": "JSON",
+      "raw": "RAW",
+      "string": "STRING",
+      "value": "INTEGER"
+    }
+  },
+  "discovery_search_order": {
+    "description": "Order of searching for DPCodes in device data",
+    "default_order": ["status_range", "function", "status"],
+    "prefer_function_order": ["function", "status_range", "status"],
+    "note": "status is only searched when not looking for specific datatype"
+  }
+}

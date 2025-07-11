@@ -14,12 +14,11 @@ Key features:
 
 import logging
 import time
-from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .mapping_rules import DPSMappingRules, DPSConfidence
-
+from .mapping_rules import DPSConfidence, DPSMappingRules
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +127,7 @@ class DPSDiscoveryEngine:
                 logger.info(f"TinyTuya discovered DPS: {sorted(result.available_dps)}")
             else:
                 # Fallback to manual probing
-                logger.warning(
-                    "TinyTuya detection failed, falling back to manual probing"
-                )
+                logger.warning("TinyTuya detection failed, falling back to manual probing")
                 result = self._manual_dps_probe(tinytuya_device)
 
         except Exception as e:
@@ -173,7 +170,8 @@ class DPSDiscoveryEngine:
 
         except Exception as e:
             logger.error(f"TinyTuya detect_available_dps() failed: {e}")
-            return None
+
+        return None
 
     def _manual_dps_probe(self, tinytuya_device) -> DPSDiscoveryResult:
         """
@@ -198,9 +196,7 @@ class DPSDiscoveryEngine:
 
             for dps_range in ranges_to_probe:
                 if time.time() - start_time > self.discovery_timeout:
-                    raise DiscoveryTimeout(
-                        f"Discovery timeout after {self.discovery_timeout}s"
-                    )
+                    raise DiscoveryTimeout(f"Discovery timeout after {self.discovery_timeout}s")
 
                 result.probed_ranges.append(dps_range)
                 discovered_in_range = self._probe_dps_range(tinytuya_device, dps_range)
@@ -234,7 +230,7 @@ class DPSDiscoveryEngine:
         discovered = {}
 
         try:
-            logger.debug(f"Probing DPS range {dps_range.start}-{dps_range.stop-1}")
+            logger.debug(f"Probing DPS range {dps_range.start}-{dps_range.stop - 1}")
 
             # Clear existing DPS requests
             tinytuya_device.dps_to_request = {}
@@ -261,9 +257,7 @@ class DPSDiscoveryEngine:
                         for dps_str, value in status["dps"].items():
                             try:
                                 dps_int = int(dps_str)
-                                if (
-                                    dps_int in dps_range or dps_int == 1
-                                ):  # Include DPS 1 as well
+                                if dps_int in dps_range or dps_int == 1:  # Include DPS 1 as well
                                     discovered[dps_int] = value
                                     logger.debug(f"Discovered DPS {dps_int}: {value}")
                             except (ValueError, TypeError):
@@ -280,9 +274,7 @@ class DPSDiscoveryEngine:
                 except Exception as e:
                     logger.debug(f"Status request attempt {attempt + 1} failed: {e}")
                     if attempt < self.max_retries - 1:
-                        time.sleep(
-                            self.probe_delay * (attempt + 1)
-                        )  # Exponential backoff
+                        time.sleep(self.probe_delay * (attempt + 1))  # Exponential backoff
                     else:
                         raise
 
@@ -291,7 +283,7 @@ class DPSDiscoveryEngine:
             # Don't return empty dict, return what we have so far
 
         logger.debug(
-            f"Discovered DPS in range {dps_range.start}-{dps_range.stop-1}: {list(discovered.keys())}"
+            f"Discovered DPS in range {dps_range.start}-{dps_range.stop - 1}: {list(discovered.keys())}"
         )
         return discovered
 
@@ -317,18 +309,14 @@ class DPSDiscoveryEngine:
         matches = []
         used_dps = set()
 
-        logger.info(
-            f"Matching capabilities {expected_capabilities} to DPS {sorted(available_dps)}"
-        )
+        logger.info(f"Matching capabilities {expected_capabilities} to DPS {sorted(available_dps)}")
 
         # Sort capabilities by priority (switch first, then brightness, etc.)
         prioritized_capabilities = self._prioritize_capabilities(expected_capabilities)
 
         for capability in prioritized_capabilities:
             # Get predicted DPS for this capability
-            predictions = self.mapping_rules.predict_dps_for_capability(
-                capability, device_category
-            )
+            predictions = self.mapping_rules.predict_dps_for_capability(capability, device_category)
 
             # Find the best available match
             best_match = None
@@ -340,14 +328,12 @@ class DPSDiscoveryEngine:
                         dps=dps,
                         confidence=confidence,
                         reason=reason,
-                        value=discovered_values.get(dps) if discovered_values else None,
+                        value=(discovered_values.get(dps) if discovered_values else None),
                     )
 
                     # Try to verify the match if we have values
                     if discovered_values and dps in discovered_values:
-                        match.verified = self._verify_dps_match(
-                            match, discovered_values[dps]
-                        )
+                        match.verified = self._verify_dps_match(match, discovered_values[dps])
 
                     best_match = match
                     break
@@ -379,17 +365,24 @@ class DPSDiscoveryEngine:
         priority_order = [
             "switch",
             "switch_led",
-            "switch_1",  # Switches first
+            "switch_1",
+            "switch_2",
+            "switch_3",  # Switches first (including extended)
             "bright_value",
             "bright_value_v2",
-            "bright_value_1",  # Brightness
+            "bright_value_1",
+            "bright_value_2",  # Brightness (including extended)
             "colour_data",
             "colour_data_v2",
             "colour_data_hsv",  # Color
             "temp_value",
-            "temp_value_v2",  # Color temperature
+            "temp_value_v2",
+            "temp_current",
+            "temp_current_2",  # Temperature (including extended)
             "work_mode",
-            "mode",  # Modes
+            "work_mode_2",
+            "mode",
+            "mode_2",  # Modes (including extended)
         ]
 
         # Sort capabilities by priority
@@ -435,10 +428,7 @@ class DPSDiscoveryEngine:
                 return isinstance(value, (int, float)) and 0 <= value <= 1000
 
             # Color capabilities might have string or dict values
-            if (
-                "colour" in match.capability.lower()
-                or "color" in match.capability.lower()
-            ):
+            if "colour" in match.capability.lower() or "color" in match.capability.lower():
                 return isinstance(value, (str, dict))
 
             # Temperature capabilities should have numeric values
@@ -448,6 +438,18 @@ class DPSDiscoveryEngine:
             # Mode capabilities might have string or numeric values
             if "mode" in match.capability.lower():
                 return isinstance(value, (str, int))
+
+            # Humidity capabilities should have numeric values
+            if "humidity" in match.capability.lower():
+                return isinstance(value, (int, float)) and 0 <= value <= 100
+
+            # Fan speed capabilities should have numeric values
+            if "fan_speed" in match.capability.lower():
+                return isinstance(value, (int, float)) and 0 <= value <= 100
+
+            # Power memory capabilities should have boolean values
+            if "power_memory" in match.capability.lower():
+                return isinstance(value, bool) or value in [0, 1, "0", "1"]
 
             # Default: assume match is valid
             return True
@@ -571,7 +573,5 @@ class DPSDiscoveryEngine:
             "issues": issues,
             "recommendations": recommendations,
             "match_count": len(matches),
-            "high_confidence_count": len(
-                [m for m in matches if m.confidence.value >= 0.7]
-            ),
+            "high_confidence_count": len([m for m in matches if m.confidence.value >= 0.7]),
         }

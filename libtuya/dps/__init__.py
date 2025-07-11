@@ -48,16 +48,19 @@ Usage:
     print(f"Mapping is valid: {validation['valid']}, Score: {validation['score']}")
 """
 
-from .mapper import DPSMapper, DeviceInfo, DPSMappingInfo, DPSMappingCache
+import logging
+
+from ..auth.models import DeviceInfo
 from .discovery import (
+    DeviceUnreachable,
+    DiscoveryError,
+    DiscoveryTimeout,
     DPSDiscoveryEngine,
     DPSDiscoveryResult,
     DPSMatch,
-    DiscoveryError,
-    DiscoveryTimeout,
-    DeviceUnreachable,
 )
-from .mapping_rules import DPSMappingRules, DPSConfidence, DPSMapping
+from .mapper import DPSMapper, DPSMappingCache, DPSMappingInfo, DPSMappingResult
+from .mapping_rules import DPSConfidence, DPSMapping, DPSMappingRules
 
 # Version info
 __version__ = "0.1.0"
@@ -70,6 +73,7 @@ __all__ = [
     "DPSMapper",
     "DeviceInfo",
     "DPSMappingInfo",
+    "DPSMappingResult",
     # Discovery engine
     "DPSDiscoveryEngine",
     "DPSDiscoveryResult",
@@ -107,7 +111,22 @@ def create_device_info(device_id: str, category: str, **kwargs) -> DeviceInfo:
     Raises:
         ValueError: If device_id or category is invalid
     """
-    return DeviceInfo(device_id=device_id, category=category, **kwargs)
+    # Import here to avoid circular imports
+    from ..auth.models import DeviceInfo
+
+    return DeviceInfo(
+        id=device_id,
+        name=kwargs.get("name", ""),
+        local_key=kwargs.get("local_key", ""),
+        category=category,
+        product_id=kwargs.get("product_id", ""),
+        product_name=kwargs.get("product_name", ""),
+        online=kwargs.get("online", True),
+        ip=kwargs.get("ip_address", ""),
+        uuid=kwargs.get("uuid", ""),
+        asset_id=kwargs.get("asset_id", ""),
+        **kwargs,
+    )
 
 
 def validate_device_category(category: str) -> bool:
@@ -258,6 +277,5 @@ ERROR_CODES = {
 }
 
 # Initialize logging
-import logging
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())

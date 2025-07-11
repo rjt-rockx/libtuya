@@ -13,29 +13,29 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .exceptions import (
-    TuyaError,
     AuthenticationError,
-    QRCodeError,
-    TokenError,
-    DeviceConnectionError,
-    LocalKeyError,
-    IPDiscoveryError,
-    DPSMappingError,
-    UnknownDeviceError,
     CapabilityMismatchError,
-    ProtocolError,
-    VersionDetectionError,
     CommandError,
-    NetworkError,
-    ConnectivityError,
-    DNSError,
-    TimeoutError,
-    DeviceError,
-    HardwareError,
-    FirmwareError,
     ConfigurationError,
+    ConnectivityError,
+    DeviceConnectionError,
+    DeviceError,
+    DNSError,
+    DPSMappingError,
+    FirmwareError,
+    HardwareError,
+    IPDiscoveryError,
+    LocalKeyError,
+    NetworkError,
+    ProtocolError,
+    QRCodeError,
+    TimeoutError,
+    TokenError,
+    TuyaError,
+    UnknownDeviceError,
+    VersionDetectionError,
 )
-from .retry_strategies import RetryManager, RetryConfig, RETRY_CONFIGS
+from .retry_strategies import RETRY_CONFIGS, RetryConfig, RetryManager
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +107,7 @@ class AuthenticationRecovery(BaseRecoveryHandler):
         self.recovery_attempts += 1
         self.last_recovery_time = time.time()
 
-        logger.info(
-            f"Attempting authentication recovery (attempt {self.recovery_attempts})"
-        )
+        logger.info(f"Attempting authentication recovery (attempt {self.recovery_attempts})")
 
         if isinstance(error, QRCodeError):
             return self._recover_qr_code_error(error, context)
@@ -118,9 +116,7 @@ class AuthenticationRecovery(BaseRecoveryHandler):
         else:
             return self._recover_generic_auth_error(error, context)
 
-    def _recover_qr_code_error(
-        self, error: QRCodeError, context: Dict[str, Any]
-    ) -> RecoveryResult:
+    def _recover_qr_code_error(self, error: QRCodeError, context: Dict[str, Any]) -> RecoveryResult:
         """Recover from QR code errors."""
         logger.debug("Recovering from QR code error")
 
@@ -147,9 +143,7 @@ class AuthenticationRecovery(BaseRecoveryHandler):
             retry_recommended=True,
         )
 
-    def _recover_token_error(
-        self, error: TokenError, context: Dict[str, Any]
-    ) -> RecoveryResult:
+    def _recover_token_error(self, error: TokenError, context: Dict[str, Any]) -> RecoveryResult:
         """Recover from token errors."""
         logger.debug("Recovering from token error")
 
@@ -187,10 +181,7 @@ class AuthenticationRecovery(BaseRecoveryHandler):
             )
 
         # Check for permission issues
-        if (
-            "permission" in error.message.lower()
-            or "unauthorized" in error.message.lower()
-        ):
+        if "permission" in error.message.lower() or "unauthorized" in error.message.lower():
             return RecoveryResult(
                 success=False,
                 message="Authentication failed due to insufficient permissions.",
@@ -203,9 +194,7 @@ class AuthenticationRecovery(BaseRecoveryHandler):
             retry_recommended=True,
         )
 
-    def _attempt_token_refresh(
-        self, error: TokenError, context: Dict[str, Any]
-    ) -> RecoveryResult:
+    def _attempt_token_refresh(self, error: TokenError, context: Dict[str, Any]) -> RecoveryResult:
         """Attempt to refresh the authentication token."""
         logger.debug("Attempting token refresh")
 
@@ -246,9 +235,7 @@ class AuthenticationRecovery(BaseRecoveryHandler):
                 logger.info("Triggering device discovery to force token refresh")
 
                 # This will trigger the SDK's automatic token refresh if needed
-                result = authenticator.device_manager.discover_devices(
-                    force_refresh=True
-                )
+                result = authenticator.device_manager.discover_devices(force_refresh=True)
 
                 # Check if we got devices back (indicating successful refresh)
                 if result.devices:
@@ -309,9 +296,7 @@ class DeviceConnectionRecovery(BaseRecoveryHandler):
         self.recovery_attempts += 1
         self.last_recovery_time = time.time()
 
-        logger.info(
-            f"Attempting device connection recovery (attempt {self.recovery_attempts})"
-        )
+        logger.info(f"Attempting device connection recovery (attempt {self.recovery_attempts})")
 
         if isinstance(error, LocalKeyError):
             return self._recover_local_key_error(error, context)
@@ -406,9 +391,7 @@ class DeviceConnectionRecovery(BaseRecoveryHandler):
             retry_recommended=True,
         )
 
-    def _attempt_local_key_refresh(
-        self, device_id: str, context: Dict[str, Any]
-    ) -> RecoveryResult:
+    def _attempt_local_key_refresh(self, device_id: str, context: Dict[str, Any]) -> RecoveryResult:
         """Attempt to refresh the local key."""
         logger.debug(f"Attempting local key refresh for device {device_id}")
 
@@ -533,9 +516,7 @@ class DPSMappingRecovery(BaseRecoveryHandler):
         self.recovery_attempts += 1
         self.last_recovery_time = time.time()
 
-        logger.info(
-            f"Attempting DPS mapping recovery (attempt {self.recovery_attempts})"
-        )
+        logger.info(f"Attempting DPS mapping recovery (attempt {self.recovery_attempts})")
 
         if isinstance(error, UnknownDeviceError):
             return self._recover_unknown_device_error(error, context)
@@ -559,9 +540,7 @@ class DPSMappingRecovery(BaseRecoveryHandler):
             )
 
         # Try to create generic mapping based on available DPS
-        fallback_mapping = self._create_fallback_mapping(
-            error.available_dps, device_info
-        )
+        fallback_mapping = self._create_fallback_mapping(error.available_dps, device_info)
 
         if fallback_mapping:
             return RecoveryResult(
@@ -833,9 +812,7 @@ class NetworkRecovery(BaseRecoveryHandler):
             retry_recommended=True,
         )
 
-    def _recover_dns_error(
-        self, error: DNSError, context: Dict[str, Any]
-    ) -> RecoveryResult:
+    def _recover_dns_error(self, error: DNSError, context: Dict[str, Any]) -> RecoveryResult:
         """Recover from DNS errors."""
         logger.debug("Recovering from DNS error")
 
@@ -906,9 +883,7 @@ class RecoveryCoordinator:
         self.handlers.append(handler)
         self.handlers.sort(key=lambda h: h.get_priority())
 
-    def recover(
-        self, error: Exception, context: Optional[Dict[str, Any]] = None
-    ) -> RecoveryResult:
+    def recover(self, error: Exception, context: Optional[Dict[str, Any]] = None) -> RecoveryResult:
         """
         Attempt to recover from an error using appropriate handlers.
 
@@ -953,9 +928,7 @@ class RecoveryCoordinator:
             if result.fallback_used:
                 self.recovery_stats["fallback_used"] += 1
 
-            logger.info(
-                f"Recovery {'succeeded' if result.success else 'failed'}: {result.message}"
-            )
+            logger.info(f"Recovery {'succeeded' if result.success else 'failed'}: {result.message}")
             return result
 
         except Exception as recovery_error:

@@ -7,7 +7,7 @@ using QR code authentication and automatic device discovery with local keys.
 Key Components:
 - TuyaAuthenticator: Main authentication interface
 - QRAuthenticator: QR code authentication flow
-- DeviceManager: Device discovery and management
+- CloudDeviceManager: Device discovery and management
 - AuthSession: Token management
 - DeviceInfo: Device information wrapper
 
@@ -31,29 +31,35 @@ Example Usage:
 
 import logging
 import uuid
-from typing import List, Optional, Dict, Any, Callable
-from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
 
+from ..concurrency import AtomicFlag, ThreadSafeMixin
+from .manager import CloudDeviceManager
 from .models import (
+    AuthenticationError,
     AuthSession,
+    DeviceDiscoveryResult,
     DeviceInfo,
     QRCodeData,
-    DeviceDiscoveryResult,
-    AuthenticationError,
 )
 from .qr_auth import QRAuthenticator
-from .manager import DeviceManager
 
 logger = logging.getLogger(__name__)
 
 
-class TuyaAuthenticator:
+class TuyaAuthenticator(ThreadSafeMixin):
     """
-    Main authentication interface for Tuya Cloud API.
+    Thread-safe main authentication interface for Tuya Cloud API.
 
     This class provides a unified interface for QR code authentication,
     device discovery, and session management. It combines the QRAuthenticator
-    and DeviceManager to provide a complete authentication solution.
+    and CloudDeviceManager to provide a complete authentication solution.
+
+    Thread Safety:
+    - All session operations are thread-safe
+    - Device discovery and caching are thread-safe
+    - Token refresh operations are atomic
+    - Multiple threads can safely call authentication methods
     """
 
     def __init__(
@@ -62,27 +68,33 @@ class TuyaAuthenticator:
         token_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         """
-        Initialize Tuya authenticator.
+        Initialize thread-safe Tuya authenticator.
 
         Args:
             endpoint: API endpoint URL
             token_callback: Optional callback for token updates
         """
+        super().__init__()  # Initialize ThreadSafeMixin
+
         self.endpoint = endpoint
         self.token_callback = token_callback
 
-        # Initialize components
+        # Initialize components (protected by locks when accessed)
         self.qr_authenticator = QRAuthenticator(endpoint)
-        self.device_manager: Optional[DeviceManager] = None
+        self.device_manager: Optional[CloudDeviceManager] = None
         self._current_session: Optional[AuthSession] = None
         self._last_qr_data: Optional[QRCodeData] = None
         self._last_user_code: Optional[str] = None
 
-        logger.info("TuyaAuthenticator initialized")
+        # Thread safety flags
+        self._initialized = AtomicFlag(True)
+        self._device_manager_initialized = AtomicFlag(False)
+
+        logger.info("Thread-safe TuyaAuthenticator initialized")
 
     def start_qr_auth(self, user_code: Optional[str] = None) -> str:
         """
-        Start QR code authentication flow.
+        Start QR code authentication flow (thread-safe).
 
         Args:
             user_code: Optional user code. If None, generates unique code.
@@ -98,20 +110,21 @@ class TuyaAuthenticator:
         # Generate user code if not provided
         if user_code is None:
             user_code = str(uuid.uuid4())
-        
-        # Store user code for later use
-        self._last_user_code = user_code
 
-        # Generate QR code
-        qr_data = self.qr_authenticator.generate_qr_code(user_code)
-        self._last_qr_data = qr_data
+        # Thread-safe storage of QR data
+        with self._write_lock():
+            self._last_user_code = user_code
 
-        # Return formatted QR code for display
+            # Generate QR code
+            qr_data = self.qr_authenticator.generate_qr_code(user_code)
+            self._last_qr_data = qr_data
+
+        # Return formatted QR code for display (no lock needed for immutable data)
         return self.qr_authenticator.format_qr_for_display(qr_data)
 
     def wait_for_auth(self, timeout: int = 300, poll_interval: int = 2) -> AuthSession:
         """
-        Wait for user to complete authentication.
+        Wait for user to complete authentication (thread-safe).
 
         Args:
             timeout: Maximum time to wait in seconds
@@ -123,22 +136,25 @@ class TuyaAuthenticator:
         Raises:
             AuthenticationError: If authentication fails or times out
         """
-        if not self._last_qr_data:
-            raise AuthenticationError(
-                "No QR code generated. Call start_qr_auth() first.", "NO_QR_CODE"
-            )
+        # Read QR data safely
+        with self._read_lock():
+            if not self._last_qr_data:
+                raise AuthenticationError(
+                    "No QR code generated. Call start_qr_auth() first.",
+                    "NO_QR_CODE",
+                )
+            qr_data = self._last_qr_data
+            user_code = self._last_user_code or str(uuid.uuid4())
 
-        # Use stored user code
-        user_code = self._last_user_code or str(uuid.uuid4())
-
-        # Wait for authentication
+        # Wait for authentication (outside lock - this is a blocking operation)
         session = self.qr_authenticator.wait_for_authentication(
-            self._last_qr_data, user_code, timeout, poll_interval
+            qr_data, user_code, timeout, poll_interval
         )
 
-        # Store session and initialize device manager
-        self._current_session = session
-        self._initialize_device_manager()
+        # Store session and initialize device manager atomically
+        with self._write_lock():
+            self._current_session = session
+            self._initialize_device_manager()
 
         return session
 
@@ -184,18 +200,19 @@ class TuyaAuthenticator:
         return session
 
     def _initialize_device_manager(self):
-        """Initialize device manager with current session."""
-        if self._current_session:
-            self.device_manager = DeviceManager(
+        """Initialize device manager with current session (called with write lock held)."""
+        if self._current_session and not self._device_manager_initialized.is_set():
+            self.device_manager = CloudDeviceManager(
                 session=self._current_session,
                 endpoint=self.endpoint,
                 token_callback=self.token_callback,
             )
+            self._device_manager_initialized.set()
             logger.info("Device manager initialized")
 
     def get_devices_with_keys(self, force_refresh: bool = False) -> List[DeviceInfo]:
         """
-        Get all devices that have local keys.
+        Get all devices that have local keys (thread-safe).
 
         Args:
             force_refresh: Force refresh device cache
@@ -206,14 +223,17 @@ class TuyaAuthenticator:
         Raises:
             AuthenticationError: If not authenticated or discovery fails
         """
-        if not self.device_manager:
-            raise AuthenticationError(
-                "Not authenticated. Call authenticate_with_qr() first.",
-                "NOT_AUTHENTICATED",
-            )
+        # Check authentication state with read lock
+        with self._read_lock():
+            if not self.device_manager:
+                raise AuthenticationError(
+                    "Not authenticated. Call authenticate_with_qr() first.",
+                    "NOT_AUTHENTICATED",
+                )
+            device_manager = self.device_manager
 
-        # Discover devices
-        result = self.device_manager.discover_devices(force_refresh)
+        # Discover devices (outside lock - this may take time)
+        result = device_manager.discover_devices(force_refresh)
 
         # Return devices with local keys
         return result.devices_with_local_keys
@@ -347,7 +367,7 @@ class TuyaAuthenticator:
         if not self._current_session:
             return {"authenticated": False}
 
-        info = {"authenticated": True}
+        info: Dict[str, Any] = {"authenticated": True}
 
         if self.device_manager:
             info.update(self.device_manager.get_session_info())
@@ -365,9 +385,7 @@ class TuyaAuthenticator:
 
     def is_authenticated(self) -> bool:
         """Check if currently authenticated."""
-        return (
-            self._current_session is not None and not self._current_session.is_expired
-        )
+        return self._current_session is not None and not self._current_session.is_expired
 
     def restore_session(self, session: AuthSession) -> bool:
         """
@@ -388,11 +406,12 @@ class TuyaAuthenticator:
             self._initialize_device_manager()
 
             # Test session by discovering devices
+            if self.device_manager is None:
+                logger.error("Device manager not initialized after session restore")
+                return False
             result = self.device_manager.discover_devices()
 
-            logger.info(
-                f"Session restored successfully with {len(result.devices)} devices"
-            )
+            logger.info(f"Session restored successfully with {len(result.devices)} devices")
             return True
 
         except Exception as e:
@@ -415,7 +434,7 @@ class TuyaAuthenticator:
 __all__ = [
     "TuyaAuthenticator",
     "QRAuthenticator",
-    "DeviceManager",
+    "CloudDeviceManager",
     "AuthSession",
     "DeviceInfo",
     "QRCodeData",

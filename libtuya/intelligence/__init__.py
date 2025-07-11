@@ -5,37 +5,37 @@ This module provides a unified interface to Home Assistant's Tuya device intelli
 including DPCode definitions, device mappings, value scaling, and quirks handling.
 """
 
-from typing import Dict, List, Optional, Union, Any, Tuple
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .dpcodes import DPCode, DPCodeManager, dpcode_manager
 from .device_mappings import (
-    DeviceCategory,
-    DeviceCapability,
-    DeviceMappingManager,
-    device_mapping_manager,
     COMMON_LIGHT_CAPABILITIES,
-    COMMON_SWITCH_CAPABILITIES,
     COMMON_SENSOR_CAPABILITIES,
+    COMMON_SWITCH_CAPABILITIES,
+    DeviceCategory,
+    DeviceMappingManager,
+    IntelligenceCapability,
+    device_mapping_manager,
+)
+from .dpcodes import DPCode, DPCodeManager, dpcode_manager
+from .quirks import (
+    COMMON_QUIRK_PATTERNS,
+    DeviceQuirk,
+    DeviceQuirksManager,
+    DPCodeFallback,
+    EntityMapping,
+    QuirkType,
+    quirks_manager,
 )
 from .scaling import (
-    IntegerTypeData,
-    EnumTypeData,
-    ColorTypeData,
-    ValueScalingManager,
-    scaling_manager,
-    remap_value,
     BRIGHTNESS_PRESETS,
     COLOR_TEMP_PRESETS,
-)
-from .quirks import (
-    DeviceQuirk,
-    EntityMapping,
-    DPCodeFallback,
-    QuirkType,
-    DeviceQuirksManager,
-    quirks_manager,
-    COMMON_QUIRK_PATTERNS,
+    ColorTypeData,
+    EnumTypeData,
+    IntegerTypeData,
+    ValueScalingManager,
+    remap_value,
+    scaling_manager,
 )
 
 
@@ -130,9 +130,7 @@ class DeviceIntelligence:
 
         # Check for multi-entity devices
         is_multi_entity = self.quirks_manager.is_multi_entity_device(canonical_category)
-        entity_mappings = self.quirks_manager.get_multi_entity_mappings(
-            canonical_category
-        )
+        entity_mappings = self.quirks_manager.get_multi_entity_mappings(canonical_category)
 
         # Get scaling information
         scaling_info = self._get_scaling_info(capabilities)
@@ -269,9 +267,7 @@ class DeviceIntelligence:
         scaling_info = capability_info.scaling_info
         if isinstance(scaling_info, IntegerTypeData):
             if target_range:
-                return scaling_info.remap_value_to(
-                    value, target_range[0], target_range[1]
-                )
+                return scaling_info.remap_value_to(value, target_range[0], target_range[1])
             else:
                 return scaling_info.scale_value(value)
 
@@ -436,17 +432,13 @@ class DeviceIntelligence:
 
         # Capability-based recommendations
         if "bright_value" in capabilities:
-            recommendations.append(
-                "Use brightness scaling with 10-1000 range as default"
-            )
+            recommendations.append("Use brightness scaling with 10-1000 range as default")
 
         if "colour_data" in capabilities:
             recommendations.append("Implement HSV color conversion with proper scaling")
 
         if "temp_value" in capabilities:
-            recommendations.append(
-                "Handle color temperature with Kelvin to mireds conversion"
-            )
+            recommendations.append("Handle color temperature with Kelvin to mireds conversion")
 
         return recommendations
 

@@ -13,15 +13,15 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
-from contextlib import contextmanager
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 from .exceptions import (
-    TuyaError,
-    NetworkError,
     DeviceConnectionError,
+    NetworkError,
+    TuyaError,
     is_retryable_error,
 )
 
@@ -57,9 +57,7 @@ class BackoffCalculator(ABC):
     """Abstract base class for backoff calculators."""
 
     @abstractmethod
-    def calculate_delay(
-        self, attempt: int, base_delay: float, max_delay: float
-    ) -> float:
+    def calculate_delay(self, attempt: int, base_delay: float, max_delay: float) -> float:
         """Calculate delay for the given attempt."""
         pass
 
@@ -71,9 +69,7 @@ class ExponentialBackoff(BackoffCalculator):
         self.multiplier = multiplier
         self.jitter = jitter
 
-    def calculate_delay(
-        self, attempt: int, base_delay: float, max_delay: float
-    ) -> float:
+    def calculate_delay(self, attempt: int, base_delay: float, max_delay: float) -> float:
         """Calculate exponential backoff delay."""
         delay = base_delay * (self.multiplier**attempt)
         delay = min(delay, max_delay)
@@ -93,9 +89,7 @@ class LinearBackoff(BackoffCalculator):
         self.increment = increment
         self.jitter = jitter
 
-    def calculate_delay(
-        self, attempt: int, base_delay: float, max_delay: float
-    ) -> float:
+    def calculate_delay(self, attempt: int, base_delay: float, max_delay: float) -> float:
         """Calculate linear backoff delay."""
         delay = base_delay + (self.increment * attempt)
         delay = min(delay, max_delay)
@@ -114,9 +108,7 @@ class FixedBackoff(BackoffCalculator):
     def __init__(self, jitter: bool = True):
         self.jitter = jitter
 
-    def calculate_delay(
-        self, attempt: int, base_delay: float, max_delay: float
-    ) -> float:
+    def calculate_delay(self, attempt: int, base_delay: float, max_delay: float) -> float:
         """Calculate fixed backoff delay."""
         delay = base_delay
 
@@ -134,9 +126,7 @@ class CustomBackoff(BackoffCalculator):
     def __init__(self, calculate_func: Callable[[int, float, float], float]):
         self.calculate_func = calculate_func
 
-    def calculate_delay(
-        self, attempt: int, base_delay: float, max_delay: float
-    ) -> float:
+    def calculate_delay(self, attempt: int, base_delay: float, max_delay: float) -> float:
         """Calculate custom backoff delay."""
         return self.calculate_func(attempt, base_delay, max_delay)
 
@@ -339,9 +329,7 @@ class RetryManager:
                 if circuit_breaker:
                     circuit_breaker.record_success()
 
-                logger.debug(
-                    f"Operation '{operation_name}' succeeded on attempt {attempt + 1}"
-                )
+                logger.debug(f"Operation '{operation_name}' succeeded on attempt {attempt + 1}")
                 return result
 
             except Exception as e:
@@ -361,29 +349,23 @@ class RetryManager:
                     circuit_breaker.record_failure()
 
                 # Log attempt
-                logger.debug(
-                    f"Operation '{operation_name}' failed on attempt {attempt + 1}: {e}"
-                )
+                logger.debug(f"Operation '{operation_name}' failed on attempt {attempt + 1}: {e}")
 
                 # Calculate delay if not the last attempt
                 if attempt < config.max_attempts - 1:
                     delay = backoff_calculator.calculate_delay(
                         attempt, config.base_delay, config.max_delay
                     )
-                    logger.debug(
-                        f"Retrying operation '{operation_name}' in {delay:.2f}s"
-                    )
+                    logger.debug(f"Retrying operation '{operation_name}' in {delay:.2f}s")
                     time.sleep(delay)
 
         # All attempts failed
-        logger.error(
-            f"Operation '{operation_name}' failed after {config.max_attempts} attempts"
-        )
+        logger.error(f"Operation '{operation_name}' failed after {config.max_attempts} attempts")
         raise last_exception
 
     async def retry_async(
         self,
-        func: Callable[..., T],
+        func: Callable[..., Awaitable[T]],
         config: RetryConfig,
         *args,
         operation_name: Optional[str] = None,
@@ -427,9 +409,7 @@ class RetryManager:
             try:
                 # Execute with timeout
                 if config.timeout:
-                    result = await asyncio.wait_for(
-                        func(*args, **kwargs), timeout=config.timeout
-                    )
+                    result = await asyncio.wait_for(func(*args, **kwargs), timeout=config.timeout)
                 else:
                     result = await func(*args, **kwargs)
 
@@ -437,9 +417,7 @@ class RetryManager:
                 if circuit_breaker:
                     circuit_breaker.record_success()
 
-                logger.debug(
-                    f"Operation '{operation_name}' succeeded on attempt {attempt + 1}"
-                )
+                logger.debug(f"Operation '{operation_name}' succeeded on attempt {attempt + 1}")
                 return result
 
             except Exception as e:
@@ -459,33 +437,25 @@ class RetryManager:
                     circuit_breaker.record_failure()
 
                 # Log attempt
-                logger.debug(
-                    f"Operation '{operation_name}' failed on attempt {attempt + 1}: {e}"
-                )
+                logger.debug(f"Operation '{operation_name}' failed on attempt {attempt + 1}: {e}")
 
                 # Calculate delay if not the last attempt
                 if attempt < config.max_attempts - 1:
                     delay = backoff_calculator.calculate_delay(
                         attempt, config.base_delay, config.max_delay
                     )
-                    logger.debug(
-                        f"Retrying operation '{operation_name}' in {delay:.2f}s"
-                    )
+                    logger.debug(f"Retrying operation '{operation_name}' in {delay:.2f}s")
                     await asyncio.sleep(delay)
 
         # All attempts failed
-        logger.error(
-            f"Operation '{operation_name}' failed after {config.max_attempts} attempts"
-        )
+        logger.error(f"Operation '{operation_name}' failed after {config.max_attempts} attempts")
         raise last_exception
 
     def _is_retryable(self, error: Exception, config: RetryConfig) -> bool:
         """Check if an error is retryable based on configuration."""
         # Check custom retryable exceptions
         if config.retryable_exceptions:
-            if any(
-                isinstance(error, exc_type) for exc_type in config.retryable_exceptions
-            ):
+            if any(isinstance(error, exc_type) for exc_type in config.retryable_exceptions):
                 return True
 
         # Use global retryable check
@@ -552,13 +522,22 @@ RETRY_CONFIGS = {
 # Pre-configured circuit breaker configurations
 CIRCUIT_BREAKER_CONFIGS = {
     "device_connection": CircuitBreakerConfig(
-        failure_threshold=3, recovery_timeout=30.0, success_threshold=2, timeout=10.0
+        failure_threshold=3,
+        recovery_timeout=30.0,
+        success_threshold=2,
+        timeout=10.0,
     ),
     "authentication": CircuitBreakerConfig(
-        failure_threshold=5, recovery_timeout=60.0, success_threshold=3, timeout=30.0
+        failure_threshold=5,
+        recovery_timeout=60.0,
+        success_threshold=3,
+        timeout=30.0,
     ),
     "device_command": CircuitBreakerConfig(
-        failure_threshold=2, recovery_timeout=10.0, success_threshold=1, timeout=5.0
+        failure_threshold=2,
+        recovery_timeout=10.0,
+        success_threshold=1,
+        timeout=5.0,
     ),
 }
 
@@ -596,7 +575,11 @@ def retry(
                 retry_config = RETRY_CONFIGS["network_operation"]
 
             return default_retry_manager.retry_sync(
-                func, retry_config, *args, operation_name=operation_name, **kwargs
+                func,
+                retry_config,
+                *args,
+                operation_name=operation_name,
+                **kwargs,
             )
 
         return wrapper
@@ -630,9 +613,17 @@ def async_retry(
                 retry_config = RETRY_CONFIGS["network_operation"]
 
             return await default_retry_manager.retry_async(
-                func, retry_config, *args, operation_name=operation_name, **kwargs
+                func,
+                retry_config,
+                *args,
+                operation_name=operation_name,
+                **kwargs,
             )
 
         return wrapper
 
     return decorator
+
+
+# Default device operation config
+device_operation_config = RETRY_CONFIGS.get("device_command", RetryConfig())

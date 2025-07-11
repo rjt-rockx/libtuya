@@ -6,8 +6,8 @@ all possible errors in the libtuya system, enabling targeted error handling
 and recovery strategies.
 """
 
-from typing import Optional, Dict, Any, List
 import time
+from typing import Any, Dict, List, Optional
 
 
 class TuyaError(Exception):
@@ -76,7 +76,7 @@ class AuthenticationError(TuyaError):
         message: str,
         auth_stage: Optional[str] = None,
         user_code: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.auth_stage = auth_stage
@@ -98,11 +98,7 @@ class TokenError(AuthenticationError):
     """Token-related authentication errors."""
 
     def __init__(
-        self,
-        message: str,
-        token_type: Optional[str] = None,
-        expired: bool = False,
-        **kwargs
+        self, message: str, token_type: Optional[str] = None, expired: bool = False, **kwargs
     ):
         super().__init__(message, auth_stage="token", **kwargs)
         self.token_type = token_type
@@ -128,7 +124,7 @@ class DeviceConnectionError(TuyaError):
         device_id: Optional[str] = None,
         device_ip: Optional[str] = None,
         local_key: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.device_id = device_id
@@ -147,7 +143,7 @@ class LocalKeyError(DeviceConnectionError):
         message: str,
         key_validation_failed: bool = False,
         encryption_error: bool = False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.key_validation_failed = key_validation_failed
@@ -164,7 +160,7 @@ class IPDiscoveryError(DeviceConnectionError):
         message: str,
         network_scan_failed: bool = False,
         device_offline: bool = False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.network_scan_failed = network_scan_failed
@@ -190,7 +186,7 @@ class DPSMappingError(TuyaError):
         device_category: Optional[str] = None,
         available_dps: Optional[List[int]] = None,
         expected_dps: Optional[List[int]] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.device_category = device_category
@@ -204,9 +200,7 @@ class DPSMappingError(TuyaError):
 class UnknownDeviceError(DPSMappingError):
     """Unknown device category errors."""
 
-    def __init__(
-        self, message: str, device_info: Optional[Dict[str, Any]] = None, **kwargs
-    ):
+    def __init__(self, message: str, device_info: Optional[Dict[str, Any]] = None, **kwargs):
         super().__init__(message, **kwargs)
         self.device_info = device_info or {}
         self.add_context("device_info", device_info)
@@ -220,7 +214,7 @@ class CapabilityMismatchError(DPSMappingError):
         message: str,
         missing_capabilities: Optional[List[str]] = None,
         unexpected_capabilities: Optional[List[str]] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.missing_capabilities = missing_capabilities or []
@@ -246,7 +240,7 @@ class ProtocolError(TuyaError):
         protocol_version: Optional[str] = None,
         command: Optional[str] = None,
         response: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.protocol_version = protocol_version
@@ -260,9 +254,7 @@ class ProtocolError(TuyaError):
 class VersionDetectionError(ProtocolError):
     """Protocol version detection errors."""
 
-    def __init__(
-        self, message: str, attempted_versions: Optional[List[str]] = None, **kwargs
-    ):
+    def __init__(self, message: str, attempted_versions: Optional[List[str]] = None, **kwargs):
         super().__init__(message, **kwargs)
         self.attempted_versions = attempted_versions or []
         self.add_context("attempted_versions", attempted_versions)
@@ -276,7 +268,7 @@ class CommandError(ProtocolError):
         message: str,
         command_type: Optional[str] = None,
         dps_data: Optional[Dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.command_type = command_type
@@ -302,7 +294,7 @@ class NetworkError(TuyaError):
         network_type: Optional[str] = None,
         host: Optional[str] = None,
         port: Optional[int] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.network_type = network_type
@@ -339,7 +331,7 @@ class TimeoutError(NetworkError):
         message: str,
         timeout_duration: Optional[float] = None,
         operation: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.timeout_duration = timeout_duration
@@ -365,7 +357,7 @@ class DeviceError(TuyaError):
         device_id: Optional[str] = None,
         device_model: Optional[str] = None,
         firmware_version: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.device_id = device_id
@@ -393,7 +385,7 @@ class FirmwareError(DeviceError):
         message: str,
         firmware_issue: Optional[str] = None,
         update_available: bool = False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.firmware_issue = firmware_issue
@@ -417,7 +409,7 @@ class ConfigurationError(TuyaError):
         message: str,
         config_section: Optional[str] = None,
         config_key: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, **kwargs)
         self.config_section = config_section
@@ -429,8 +421,16 @@ class ConfigurationError(TuyaError):
 # Exception hierarchy map for error categorization
 EXCEPTION_HIERARCHY = {
     "authentication": [AuthenticationError, QRCodeError, TokenError],
-    "device_connection": [DeviceConnectionError, LocalKeyError, IPDiscoveryError],
-    "dps_mapping": [DPSMappingError, UnknownDeviceError, CapabilityMismatchError],
+    "device_connection": [
+        DeviceConnectionError,
+        LocalKeyError,
+        IPDiscoveryError,
+    ],
+    "dps_mapping": [
+        DPSMappingError,
+        UnknownDeviceError,
+        CapabilityMismatchError,
+    ],
     "protocol": [ProtocolError, VersionDetectionError, CommandError],
     "network": [NetworkError, ConnectivityError, DNSError, TimeoutError],
     "device": [DeviceError, HardwareError, FirmwareError],

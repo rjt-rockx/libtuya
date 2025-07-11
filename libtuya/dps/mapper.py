@@ -14,38 +14,18 @@ Key features:
 - Provides mapping persistence and caching
 """
 
-import logging
 import json
+import logging
 import time
-from typing import Dict, List, Optional, Set, Tuple, Any, Union
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from .mapping_rules import DPSMappingRules, DPSConfidence
+from ..auth.models import DeviceInfo
 from .discovery import DPSDiscoveryEngine, DPSDiscoveryResult, DPSMatch
-
+from .mapping_rules import DPSConfidence, DPSMappingRules
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class DeviceInfo:
-    """Device information for DPS mapping"""
-
-    device_id: str
-    category: str
-    name: Optional[str] = None
-    model: Optional[str] = None
-    local_key: Optional[str] = None
-    ip_address: Optional[str] = None
-    protocol_version: Optional[str] = None
-
-    def __post_init__(self):
-        """Validate device info"""
-        if not self.device_id:
-            raise ValueError("Device ID is required")
-        if not self.category:
-            raise ValueError("Device category is required")
 
 
 @dataclass
@@ -65,6 +45,21 @@ class DPSMappingInfo:
     scale_factor: Optional[float] = None
     verified: bool = False
     last_updated: float = field(default_factory=time.time)
+
+
+@dataclass
+class DPSMappingResult:
+    """Result of DPS mapping operation"""
+
+    mappings: Dict[str, DPSMappingInfo] = field(default_factory=dict)
+    device_id: Optional[str] = None
+    success: bool = True
+    error: Optional[str] = None
+    mapping_count: int = 0
+
+    def __post_init__(self):
+        """Update mapping count after initialization"""
+        self.mapping_count = len(self.mappings)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -113,9 +108,7 @@ class DPSMappingCache:
                 for device_id, mappings in data.items():
                     self._cache[device_id] = {}
                     for capability, mapping_data in mappings.items():
-                        self._cache[device_id][capability] = DPSMappingInfo.from_dict(
-                            mapping_data
-                        )
+                        self._cache[device_id][capability] = DPSMappingInfo.from_dict(mapping_data)
 
                 logger.debug(f"Loaded {len(self._cache)} device mappings from cache")
         except Exception as e:
@@ -140,10 +133,16 @@ class DPSMappingCache:
 
     def get_mapping(self, device_id: str, capability: str) -> Optional[DPSMappingInfo]:
         """Get cached mapping for device and capability"""
+        if device_id is None or capability is None:
+            return None
         return self._cache.get(device_id, {}).get(capability)
 
     def set_mapping(self, mapping: DPSMappingInfo):
         """Cache a mapping"""
+        if mapping.device_id is None or mapping.capability is None:
+            logger.warning("Skipping mapping with None device_id or capability")
+            return
+
         if mapping.device_id not in self._cache:
             self._cache[mapping.device_id] = {}
 
@@ -222,7 +221,7 @@ class DPSMapper:
         device_id = device_info.device_id
 
         # Check cache first
-        if not force_discovery and self.enable_cache:
+        if not force_discovery and self.enable_cache and self.cache is not None:
             cached_mappings = self.cache.get_device_mappings(device_id)
             if cached_mappings:
                 # Filter to only requested capabilities
@@ -248,9 +247,7 @@ class DPSMapper:
         )
 
         if not discovery_result.success:
-            logger.error(
-                f"DPS discovery failed for device {device_id}: {discovery_result.error}"
-            )
+            logger.error(f"DPS discovery failed for device {device_id}: {discovery_result.error}")
             return {}
 
         # Convert matches to mapping info
@@ -260,20 +257,24 @@ class DPSMapper:
                 device_id=device_id,
                 capability=match.capability,
                 dps=match.dps,
-                confidence=match.confidence,
-                reason=match.reason,
+                dpcode=getattr(match, "dpcode", "unknown"),
+                data_type=getattr(match, "data_type", "unknown"),
+                confidence=(
+                    match.confidence.value
+                    if isinstance(match.confidence, DPSConfidence)
+                    else match.confidence
+                ),
+                reason=match.reason or "discovery",
                 verified=match.verified,
                 value_type=(
-                    self._infer_value_type(match.value)
-                    if match.value is not None
-                    else None
+                    self._infer_value_type(match.value) if match.value is not None else None
                 ),
             )
 
             mappings[match.capability] = mapping_info
 
             # Cache the mapping
-            if self.enable_cache:
+            if self.enable_cache and self.cache is not None:
                 self.cache.set_mapping(mapping_info)
 
         # Store in current mappings
@@ -326,6 +327,32 @@ class DPSMapper:
         """
         return self._device_mappings.get(device_id, {}).copy()
 
+    def get_device_mappings(self, device_id: str) -> DPSMappingResult:
+        """
+        Get DPS mappings for a device in result format
+
+        Args:
+            device_id: Device identifier
+
+        Returns:
+            DPSMappingResult containing mappings and metadata
+        """
+        mappings = self._device_mappings.get(device_id, {}).copy()
+        
+        # If no mappings found in memory, try cache
+        if not mappings and self.enable_cache and self.cache is not None:
+            mappings = self.cache.get_device_mappings(device_id)
+            if mappings:
+                # Store in memory for future access
+                self._device_mappings[device_id] = mappings
+
+        return DPSMappingResult(
+            mappings=mappings,
+            device_id=device_id,
+            success=True,
+            mapping_count=len(mappings)
+        )
+
     def get_dps_to_capability_mapping(self, device_id: str) -> Dict[int, str]:
         """
         Get bidirectional mapping from DPS to capability
@@ -364,8 +391,12 @@ class DPSMapper:
             match = DPSMatch(
                 capability=capability,
                 dps=mapping.dps,
-                confidence=mapping.confidence,
-                reason=mapping.reason,
+                confidence=(
+                    DPSConfidence(mapping.confidence)
+                    if isinstance(mapping.confidence, float)
+                    else mapping.confidence
+                ),
+                reason=mapping.reason or "unknown",
                 verified=mapping.verified,
             )
             matches.append(match)
@@ -394,8 +425,10 @@ class DPSMapper:
             device_id=device_id,
             capability=capability,
             dps=dps,
-            confidence=confidence,
-            reason=reason,
+            dpcode="unknown",
+            data_type="unknown",
+            confidence=(confidence.value if isinstance(confidence, DPSConfidence) else confidence),
+            reason=reason or "manual",
             verified=False,
             last_updated=time.time(),
         )
@@ -406,7 +439,7 @@ class DPSMapper:
         self._device_mappings[device_id][capability] = mapping_info
 
         # Update cache
-        if self.enable_cache:
+        if self.enable_cache and self.cache is not None:
             self.cache.set_mapping(mapping_info)
 
         logger.info(f"Updated mapping for {device_id}: {capability} -> DPS {dps}")
@@ -434,7 +467,7 @@ class DPSMapper:
         if device_id in self._device_mappings:
             del self._device_mappings[device_id]
 
-        if self.enable_cache:
+        if self.enable_cache and self.cache is not None:
             self.cache.clear_device(device_id)
 
         logger.info(f"Cleared all mappings for device {device_id}")
@@ -463,7 +496,10 @@ class DPSMapper:
 
         capabilities = list(mappings.keys())
         dps_indices = [mapping.dps for mapping in mappings.values()]
-        confidences = [mapping.confidence.value for mapping in mappings.values()]
+        confidences = [
+            (mapping.confidence if isinstance(mapping.confidence, float) else mapping.confidence)
+            for mapping in mappings.values()
+        ]
 
         # Check for critical capabilities
         critical_caps = ["switch", "switch_led", "switch_1"]
@@ -518,10 +554,7 @@ class DPSMapper:
         export_data = {
             "device_id": device_id,
             "export_time": time.time(),
-            "mappings": {
-                capability: mapping.to_dict()
-                for capability, mapping in mappings.items()
-            },
+            "mappings": {capability: mapping.to_dict() for capability, mapping in mappings.items()},
         }
 
         with open(file_path, "w") as f:
@@ -551,7 +584,7 @@ class DPSMapper:
         self._device_mappings[device_id] = mappings
 
         # Update cache
-        if self.enable_cache:
+        if self.enable_cache and self.cache is not None:
             for mapping in mappings.values():
                 self.cache.set_mapping(mapping)
 

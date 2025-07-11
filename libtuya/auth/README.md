@@ -71,22 +71,67 @@ The system includes comprehensive error handling for:
 - Authentication timeouts
 - Invalid QR codes
 
-## Testing
-
-Run the test suite with:
-
-```bash
-pytest tests/auth/
-```
-
 ## Dependencies
 
 - `tuya-device-sharing-sdk>=0.2.0`
-- `pytest>=7.0.0` (for testing)
 
 ## Thread Safety
 
-The authentication system is not thread-safe. Use separate instances for concurrent access or implement appropriate locking mechanisms.
+**✅ FULLY THREAD-SAFE** - The authentication system now provides complete thread safety:
+
+### Thread Safety Guarantees
+
+- **Session Operations**: All authentication and session management operations are thread-safe
+- **Device Discovery**: Concurrent device discovery operations are properly synchronized
+- **Token Refresh**: Token refresh operations are atomic and thread-safe
+- **Cache Operations**: All device and status caches use thread-safe implementations
+- **Initialization**: Device initialization is handled by thread-safe one-time initializers
+
+### Concurrency Patterns
+
+```python
+from libtuya.auth import TuyaAuthenticator
+import threading
+
+# Safe to use same authenticator instance across threads
+authenticator = TuyaAuthenticator()
+
+def worker_thread():
+    # Each thread can safely perform authentication
+    qr_code = authenticator.start_qr_auth()
+    
+    # Safe concurrent device discovery
+    devices = authenticator.get_devices_with_keys(force_refresh=True)
+    
+    # Thread-safe access to session info
+    session_info = authenticator.get_session_info()
+
+# Start multiple worker threads
+threads = []
+for i in range(5):
+    thread = threading.Thread(target=worker_thread)
+    threads.append(thread)
+    thread.start()
+
+for thread in threads:
+    thread.join()
+```
+
+### Performance Characteristics
+
+- **Read Operations**: Optimized with reader-writer locks for high concurrency
+- **Write Operations**: Exclusive access with minimal blocking
+- **Cache Access**: Lock-free reads for cached data with TTL management
+- **Initialization**: One-time thread-safe initialization prevents duplicate work
+
+### Implementation Details
+
+The thread safety is implemented using:
+- Reader-writer locks for performance optimization
+- Thread-safe caches with automatic cleanup
+- Atomic flags for state management
+- One-time initializers for expensive operations
+- Proper lock ordering to prevent deadlocks
 
 ## Security Considerations
 

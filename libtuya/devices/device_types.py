@@ -6,13 +6,16 @@ with device-specific methods and proper value scaling for common device types.
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Union, Tuple
-from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Tuple
 
-from .intelligent_device import IntelligentDevice, DeviceCapability, DeviceStatus
+from ..auth import TuyaAuthenticator
 from ..auth.models import DeviceInfo
-from ..intelligence import DeviceIntelligence
 from ..dps import DPSMapper
+from ..dps.capability_patterns import centralized_dps_mapping
+from ..intelligence import DeviceIntelligence
+from ..intelligence.quirks import centralized_quirks
+from ..intelligence.scaling import centralized_scaling
+from .intelligent_device import IntelligentDevice
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +33,11 @@ class IntelligentLight(IntelligentDevice):
         device_info: DeviceInfo,
         intelligence: DeviceIntelligence,
         dps_mapper: DPSMapper,
+        auth_manager: "TuyaAuthenticator",
         **kwargs,
     ):
         """Initialize intelligent light device."""
-        super().__init__(device_info, intelligence, dps_mapper, **kwargs)
+        super().__init__(device_info, intelligence, dps_mapper, auth_manager, **kwargs)
 
         # Light-specific capability mappings
         self.brightness_capabilities = [
@@ -41,7 +45,11 @@ class IntelligentLight(IntelligentDevice):
             "bright_value_v2",
             "bright_value_1",
         ]
-        self.color_capabilities = ["colour_data", "colour_data_v2", "colour_data_hsv"]
+        self.color_capabilities = [
+            "colour_data",
+            "colour_data_v2",
+            "colour_data_hsv",
+        ]
         self.color_temp_capabilities = ["temp_value", "temp_value_v2"]
         self.switch_capabilities = ["switch_led", "switch", "switch_1"]
         self.mode_capabilities = ["work_mode", "mode", "scene"]
@@ -51,6 +59,11 @@ class IntelligentLight(IntelligentDevice):
         self._last_color = None
         self._last_color_temp = None
         self._supported_modes = None
+
+    @property
+    def dps_mappings(self):
+        """Access DPS mappings through capability translator."""
+        return self.capability_translator.dps_mappings
 
     @property
     def is_on(self) -> bool:
@@ -67,9 +80,7 @@ class IntelligentLight(IntelligentDevice):
             if brightness_cap in self.dps_mappings:
                 raw_value = self.get_capability(brightness_cap)
                 if raw_value is not None:
-                    return self._scale_brightness_to_percentage(
-                        brightness_cap, raw_value
-                    )
+                    return self._scale_brightness_to_percentage(brightness_cap, raw_value)
         return None
 
     @property
@@ -96,9 +107,7 @@ class IntelligentLight(IntelligentDevice):
     def supported_features(self) -> Dict[str, bool]:
         """Get supported light features."""
         return {
-            "brightness": any(
-                cap in self.dps_mappings for cap in self.brightness_capabilities
-            ),
+            "brightness": any(cap in self.dps_mappings for cap in self.brightness_capabilities),
             "color": any(cap in self.dps_mappings for cap in self.color_capabilities),
             "color_temperature": any(
                 cap in self.dps_mappings for cap in self.color_temp_capabilities
@@ -107,9 +116,7 @@ class IntelligentLight(IntelligentDevice):
             "switch": any(cap in self.dps_mappings for cap in self.switch_capabilities),
         }
 
-    def set_brightness(
-        self, brightness: int, transition_time: Optional[int] = None
-    ) -> bool:
+    def set_brightness(self, brightness: int, _transition_time: Optional[int] = None) -> bool:
         """
         Set brightness with optional transition time.
 
@@ -183,18 +190,24 @@ class IntelligentLight(IntelligentDevice):
 
     def set_scene(self, scene_name: str) -> bool:
         """
-        Set light to a predefined scene.
+        Set light to a predefined scene using LocalTuya scene intelligence.
 
         Args:
-            scene_name: Scene name (e.g., "read", "relax", "bright")
+            scene_name: Scene name (e.g., "Night", "Read", "Meeting", "Soft", "Rainbow")
 
         Returns:
             True if successful, False otherwise
         """
-        # Map scene names to device values
+        # Use the enhanced scene intelligence from the base class
+        success = super().set_scene(scene_name)
+        if success:
+            return True
+
+        # Fallback to simple scene mappings for basic light modes
         scene_mappings = {
             "white": "white",
             "colour": "colour",
+            "color": "colour",
             "scene": "scene",
             "music": "music",
             "read": "read",
@@ -214,6 +227,62 @@ class IntelligentLight(IntelligentDevice):
 
         logger.warning(f"Scene capability not found for light {self.device_info.id}")
         return False
+
+    def get_available_scenes(self) -> List[str]:
+        """
+        Get list of scenes available for this light device.
+
+        Returns:
+            List of scene names this light supports
+        """
+        # Get scenes from the enhanced intelligence system
+        intelligent_scenes = self.get_supported_scenes()
+
+        # Add basic light mode scenes
+        basic_scenes = ["white", "colour", "scene", "music"]
+
+        # Combine and deduplicate
+        all_scenes = list(set(intelligent_scenes + basic_scenes))
+
+        logger.debug(f"Light {self.device_info.id} supports {len(all_scenes)} scenes: {all_scenes}")
+        return all_scenes
+
+    def set_light_mode(self, mode: str) -> bool:
+        """
+        Set light mode using intelligent mode mapping.
+
+        Args:
+            mode: Light mode ("color", "white", "scene", "music")
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Use the enhanced mode mapping from the base class
+        success = self.set_mode_with_mapping(mode)
+        if success:
+            return True
+
+        # Fallback to direct mode setting
+        for mode_cap in self.mode_capabilities:
+            if mode_cap in self.dps_mappings:
+                return self.set_capability(mode_cap, mode)
+
+        logger.warning(f"Mode capability not found for light {self.device_info.id}")
+        return False
+
+    def get_current_light_mode(self) -> Optional[str]:
+        """
+        Get current light mode.
+
+        Returns:
+            Current mode string or None if not available
+        """
+        for mode_cap in self.mode_capabilities:
+            if mode_cap in self.dps_mappings:
+                raw_mode = self.get_capability(mode_cap)
+                if raw_mode:
+                    return str(raw_mode)
+        return None
 
     async def pulse_light(self, duration: int = 3, brightness: int = 100) -> bool:
         """
@@ -257,36 +326,13 @@ class IntelligentLight(IntelligentDevice):
 
     def _scale_brightness_to_percentage(self, capability: str, raw_value: Any) -> int:
         """Convert raw brightness value to percentage."""
-        try:
-            mapping_info = self.dps_mappings.get(capability)
-            if mapping_info:
-                # Use HA intelligence for proper inverse scaling
-                try:
-                    percentage = self.intelligence.scale_value(
-                        dpcode=capability,
-                        value=raw_value,
-                        device_category=self.device_info.category,
-                        output_range=(0, 100),  # Output is percentage
-                        scaling_type="brightness",
-                        inverse=True,  # Convert from device value to percentage
-                    )
-                    return int(percentage)
-                except Exception as e:
-                    logger.warning(f"HA inverse scaling failed for {capability}: {e}")
-                    # Fall back to manual scaling
-                    if mapping_info.scaling_info:
-                        min_val = mapping_info.scaling_info.get("min", 10)
-                        max_val = mapping_info.scaling_info.get("max", 1000)
-                        return int((raw_value - min_val) / (max_val - min_val) * 100)
+        mapping_info = self.dps_mappings.get(capability)
+        mapping_dict = mapping_info.__dict__ if mapping_info else None
+        return centralized_scaling.scale_brightness_value(
+            raw_value, capability, mapping_dict, (0, 100)
+        )
 
-            # Default scaling (10-1000 range)
-            return int((raw_value - 10) / 990 * 100)
-        except Exception:
-            return int(raw_value) if isinstance(raw_value, (int, float)) else 0
-
-    def _parse_color_value(
-        self, capability: str, raw_value: Any
-    ) -> Optional[Tuple[int, int, int]]:
+    def _parse_color_value(self, capability: str, raw_value: Any) -> Optional[Tuple[int, int, int]]:
         """Parse raw color value to RGB tuple."""
         try:
             if isinstance(raw_value, str):
@@ -317,11 +363,11 @@ class IntelligentLight(IntelligentDevice):
 
     def _scale_color_temperature(self, capability: str, raw_value: Any) -> int:
         """Scale raw color temperature value to Kelvin."""
-        try:
-            # Most devices use Kelvin directly
-            return int(raw_value)
-        except Exception:
-            return 3000  # Default warm white
+        mapping_info = self.dps_mappings.get(capability)
+        mapping_dict = mapping_info.__dict__ if mapping_info else None
+        return centralized_scaling.scale_color_temperature_value(
+            raw_value, capability, mapping_dict
+        )
 
 
 class IntelligentSwitch(IntelligentDevice):
@@ -336,10 +382,11 @@ class IntelligentSwitch(IntelligentDevice):
         device_info: DeviceInfo,
         intelligence: DeviceIntelligence,
         dps_mapper: DPSMapper,
+        auth_manager: "TuyaAuthenticator",
         **kwargs,
     ):
         """Initialize intelligent switch device."""
-        super().__init__(device_info, intelligence, dps_mapper, **kwargs)
+        super().__init__(device_info, intelligence, dps_mapper, auth_manager, **kwargs)
 
         # Switch-specific capability mappings
         self.switch_capabilities = [
@@ -355,6 +402,11 @@ class IntelligentSwitch(IntelligentDevice):
 
         # Detect number of channels
         self.channel_count = self._detect_channel_count()
+
+    @property
+    def dps_mappings(self):
+        """Access DPS mappings through capability translator."""
+        return self.capability_translator.dps_mappings
 
     @property
     def is_on(self) -> bool:
@@ -503,15 +555,9 @@ class IntelligentSwitch(IntelligentDevice):
             "voltage_volts": self.voltage,
             "current_amps": self.current,
             "supported_monitoring": {
-                "power": any(
-                    cap in self.dps_mappings for cap in self.power_capabilities
-                ),
-                "voltage": any(
-                    cap in self.dps_mappings for cap in self.voltage_capabilities
-                ),
-                "current": any(
-                    cap in self.dps_mappings for cap in self.current_capabilities
-                ),
+                "power": any(cap in self.dps_mappings for cap in self.power_capabilities),
+                "voltage": any(cap in self.dps_mappings for cap in self.voltage_capabilities),
+                "current": any(cap in self.dps_mappings for cap in self.current_capabilities),
             },
         }
 
@@ -525,42 +571,27 @@ class IntelligentSwitch(IntelligentDevice):
 
     def _scale_power_value(self, capability: str, raw_value: Any) -> float:
         """Scale raw power value to watts."""
-        try:
-            # Most devices report power in watts, but some use 0.1W units
-            mapping_info = self.dps_mappings.get(capability)
-            if mapping_info and mapping_info.scaling_info:
-                scale_factor = mapping_info.scaling_info.get("scale", 1.0)
-                return float(raw_value) * scale_factor
-            else:
-                return float(raw_value)
-        except Exception:
-            return 0.0
+        mapping_info = self.dps_mappings.get(capability)
+        mapping_dict = mapping_info.__dict__ if mapping_info else None
+        return centralized_scaling.scale_electrical_value(
+            raw_value, capability, "power", mapping_dict
+        )
 
     def _scale_voltage_value(self, capability: str, raw_value: Any) -> float:
         """Scale raw voltage value to volts."""
-        try:
-            # Most devices report voltage in volts, but some use 0.1V units
-            mapping_info = self.dps_mappings.get(capability)
-            if mapping_info and mapping_info.scaling_info:
-                scale_factor = mapping_info.scaling_info.get("scale", 1.0)
-                return float(raw_value) * scale_factor
-            else:
-                return float(raw_value)
-        except Exception:
-            return 0.0
+        mapping_info = self.dps_mappings.get(capability)
+        mapping_dict = mapping_info.__dict__ if mapping_info else None
+        return centralized_scaling.scale_electrical_value(
+            raw_value, capability, "voltage", mapping_dict
+        )
 
     def _scale_current_value(self, capability: str, raw_value: Any) -> float:
         """Scale raw current value to amps."""
-        try:
-            # Most devices report current in mA, convert to A
-            mapping_info = self.dps_mappings.get(capability)
-            if mapping_info and mapping_info.scaling_info:
-                scale_factor = mapping_info.scaling_info.get("scale", 0.001)
-                return float(raw_value) * scale_factor
-            else:
-                return float(raw_value) * 0.001  # Default mA to A conversion
-        except Exception:
-            return 0.0
+        mapping_info = self.dps_mappings.get(capability)
+        mapping_dict = mapping_info.__dict__ if mapping_info else None
+        return centralized_scaling.scale_electrical_value(
+            raw_value, capability, "current", mapping_dict
+        )
 
 
 class IntelligentClimate(IntelligentDevice):
@@ -575,13 +606,18 @@ class IntelligentClimate(IntelligentDevice):
         device_info: DeviceInfo,
         intelligence: DeviceIntelligence,
         dps_mapper: DPSMapper,
+        auth_manager: "TuyaAuthenticator",
         **kwargs,
     ):
         """Initialize intelligent climate device."""
-        super().__init__(device_info, intelligence, dps_mapper, **kwargs)
+        super().__init__(device_info, intelligence, dps_mapper, auth_manager, **kwargs)
 
         # Climate-specific capability mappings
-        self.temperature_capabilities = ["temp_set", "temp_current", "temp_value"]
+        self.temperature_capabilities = [
+            "temp_set",
+            "temp_current",
+            "temp_value",
+        ]
         self.humidity_capabilities = [
             "humidity_set",
             "humidity_current",
@@ -591,7 +627,19 @@ class IntelligentClimate(IntelligentDevice):
         self.switch_capabilities = ["switch", "power"]
 
         # Common climate modes
-        self.supported_modes = ["auto", "cool", "heat", "dry", "fan_only", "off"]
+        self.supported_modes = [
+            "auto",
+            "cool",
+            "heat",
+            "dry",
+            "fan_only",
+            "off",
+        ]
+
+    @property
+    def dps_mappings(self):
+        """Access DPS mappings through capability translator."""
+        return self.capability_translator.dps_mappings
 
     @property
     def current_temperature(self) -> Optional[float]:
@@ -659,9 +707,7 @@ class IntelligentClimate(IntelligentDevice):
                 scaled_temp = self._scale_temperature_for_device(temp_cap, temperature)
                 return self.set_capability(temp_cap, scaled_temp)
 
-        logger.warning(
-            f"Temperature set capability not found for climate {self.device_info.id}"
-        )
+        logger.warning(f"Temperature set capability not found for climate {self.device_info.id}")
         return False
 
     def set_humidity(self, humidity: float) -> bool:
@@ -681,21 +727,25 @@ class IntelligentClimate(IntelligentDevice):
             if "set" in humidity_cap and humidity_cap in self.dps_mappings:
                 return self.set_capability(humidity_cap, int(humidity))
 
-        logger.warning(
-            f"Humidity set capability not found for climate {self.device_info.id}"
-        )
+        logger.warning(f"Humidity set capability not found for climate {self.device_info.id}")
         return False
 
     def set_mode(self, mode: str) -> bool:
         """
-        Set climate mode.
+        Set climate mode using intelligent mode mapping for LocalTuya compatibility.
 
         Args:
-            mode: Mode name (e.g., "auto", "cool", "heat", "dry", "fan_only")
+            mode: Mode name (e.g., "manual", "auto", "heat", "cool", "dry", "fan_only")
 
         Returns:
             True if successful, False otherwise
         """
+        # Use the enhanced mode mapping from the base class
+        success = self.set_mode_with_mapping(mode)
+        if success:
+            return True
+
+        # Fallback to direct mode setting
         for mode_cap in self.mode_capabilities:
             if mode_cap in self.dps_mappings:
                 return self.set_capability(mode_cap, mode)
@@ -703,32 +753,133 @@ class IntelligentClimate(IntelligentDevice):
         logger.warning(f"Mode capability not found for climate {self.device_info.id}")
         return False
 
+    def get_available_climate_modes(self) -> List[str]:
+        """
+        Get list of climate modes available for this device.
+
+        Returns:
+            List of mode strings this climate device supports
+        """
+        # Get modes from the enhanced intelligence system
+        intelligent_modes = self.get_supported_modes()
+
+        # Add standard climate modes as fallback
+        standard_modes = ["auto", "cool", "heat", "dry", "fan_only", "off"]
+
+        # Combine and deduplicate
+        all_modes = list(set(intelligent_modes + standard_modes))
+
+        logger.debug(f"Climate {self.device_info.id} supports {len(all_modes)} modes: {all_modes}")
+        return all_modes
+
+    def set_hvac_action(self, action: str) -> bool:
+        """
+        Set HVAC action using LocalTuya action mapping intelligence.
+
+        Args:
+            action: Action string ("heating", "cooling", "idle", "off")
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            mode_data = self._load_mode_mappings()
+            if not mode_data:
+                logger.warning(
+                    f"No mode mapping available for HVAC action on {self.device_info.id}"
+                )
+                return False
+
+            # Get HVAC action patterns
+            action_patterns = mode_data.get("hvac_action_sets", {}).get("patterns", {})
+
+            # Try to detect which pattern this device uses
+            detected_pattern = self._detect_hvac_action_pattern(action_patterns)
+
+            if not detected_pattern:
+                # Default to boolean pattern
+                detected_pattern = "true_false_boolean"
+
+            pattern_data = action_patterns.get(detected_pattern, {})
+            mappings = pattern_data.get("mappings", {})
+
+            # Map high-level action to device value
+            action_mapping = {
+                "heating": mappings.get("heating"),
+                "cooling": mappings.get("cooling"),
+                "idle": mappings.get("idle"),
+                "off": mappings.get("idle"),  # Map off to idle
+            }
+
+            device_action_value = action_mapping.get(action.lower())
+            if device_action_value is None:
+                logger.warning(f"Could not map HVAC action '{action}' for {self.device_info.id}")
+                return False
+
+            # Find action capability and apply
+            action_capability = None
+            for capability in self.dps_mappings.keys():
+                if "action" in capability.lower():
+                    action_capability = capability
+                    break
+
+            if action_capability:
+                logger.debug(
+                    f"Setting HVAC action '{action}' -> '{device_action_value}' via {action_capability}"
+                )
+                return self.set_capability(action_capability, device_action_value)
+            else:
+                logger.warning(f"No HVAC action capability found for {self.device_info.id}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to set HVAC action '{action}' for {self.device_info.id}: {e}")
+            return False
+
+    def _detect_hvac_action_pattern(self, action_patterns: Dict[str, Any]) -> Optional[str]:
+        """Detect which HVAC action pattern this device uses."""
+        try:
+            # Get current action value if available
+            current_action = None
+            for capability in self.dps_mappings.keys():
+                if "action" in capability.lower():
+                    current_action = self.get_capability(capability)
+                    break
+
+            if current_action is None:
+                return None
+
+            # Check patterns for matches
+            for pattern_name, pattern_data in action_patterns.items():
+                mappings = pattern_data.get("mappings", {})
+                for action_values in mappings.values():
+                    if isinstance(action_values, bool) and action_values == current_action:
+                        return pattern_name
+                    elif (
+                        isinstance(action_values, str)
+                        and action_values.lower() == str(current_action).lower()
+                    ):
+                        return pattern_name
+
+            return None
+
+        except Exception as e:
+            logger.error(f"HVAC action pattern detection failed: {e}")
+            return None
+
     def _scale_temperature_value(self, capability: str, raw_value: Any) -> float:
         """Scale raw temperature value to Celsius."""
-        try:
-            # Most devices use Celsius, but some use Fahrenheit or scaled values
-            mapping_info = self.dps_mappings.get(capability)
-            if mapping_info and mapping_info.scaling_info:
-                scale_factor = mapping_info.scaling_info.get("scale", 1.0)
-                offset = mapping_info.scaling_info.get("offset", 0.0)
-                return float(raw_value) * scale_factor + offset
-            else:
-                return float(raw_value)
-        except Exception:
-            return 0.0
+        mapping_info = self.dps_mappings.get(capability)
+        mapping_dict = mapping_info.__dict__ if mapping_info else None
+        return centralized_scaling.scale_temperature_value(raw_value, capability, mapping_dict)
 
     def _scale_temperature_for_device(self, capability: str, temperature: float) -> Any:
         """Scale temperature for device storage."""
-        try:
-            mapping_info = self.dps_mappings.get(capability)
-            if mapping_info and mapping_info.scaling_info:
-                scale_factor = mapping_info.scaling_info.get("scale", 1.0)
-                offset = mapping_info.scaling_info.get("offset", 0.0)
-                return int((temperature - offset) / scale_factor)
-            else:
-                return int(temperature)
-        except Exception:
-            return int(temperature)
+        mapping_info = self.dps_mappings.get(capability)
+        mapping_dict = mapping_info.__dict__ if mapping_info else None
+        return centralized_scaling.scale_temperature_for_device(
+            temperature, capability, mapping_dict
+        )
 
 
 class IntelligentCover(IntelligentDevice):
@@ -743,10 +894,11 @@ class IntelligentCover(IntelligentDevice):
         device_info: DeviceInfo,
         intelligence: DeviceIntelligence,
         dps_mapper: DPSMapper,
+        auth_manager: "TuyaAuthenticator",
         **kwargs,
     ):
         """Initialize intelligent cover device."""
-        super().__init__(device_info, intelligence, dps_mapper, **kwargs)
+        super().__init__(device_info, intelligence, dps_mapper, auth_manager, **kwargs)
 
         # Cover-specific capability mappings
         self.control_capabilities = ["control", "mach_operate"]
@@ -760,6 +912,11 @@ class IntelligentCover(IntelligentDevice):
             "stop": "stop",
             "pause": "pause",
         }
+
+    @property
+    def dps_mappings(self):
+        """Access DPS mappings through capability translator."""
+        return self.capability_translator.dps_mappings
 
     @property
     def current_position(self) -> Optional[int]:
@@ -851,6 +1008,7 @@ class IntelligentCover(IntelligentDevice):
 # Factory function to create appropriate device type
 def create_specialized_device(
     device_info: DeviceInfo,
+    auth_manager: "TuyaAuthenticator",
     intelligence: DeviceIntelligence,
     dps_mapper: DPSMapper,
     **kwargs,
@@ -860,6 +1018,7 @@ def create_specialized_device(
 
     Args:
         device_info: Device information
+        auth_manager: TuyaAuthenticator instance for cloud operations
         intelligence: Device intelligence
         dps_mapper: DPS mapper
         **kwargs: Additional arguments, including tinytuya_device_instance and entity_capabilities for multi-entity
@@ -871,20 +1030,20 @@ def create_specialized_device(
 
     # Light categories
     if category in ["dj", "dc", "dd", "dsd", "xdd", "tgkg", "tgq"]:
-        return IntelligentLight(device_info, intelligence, dps_mapper, **kwargs)
+        return IntelligentLight(device_info, intelligence, dps_mapper, auth_manager, **kwargs)
 
     # Switch categories
     elif category in ["kg", "pc", "cz", "tdq"]:
-        return IntelligentSwitch(device_info, intelligence, dps_mapper, **kwargs)
+        return IntelligentSwitch(device_info, intelligence, dps_mapper, auth_manager, **kwargs)
 
     # Climate categories
     elif category in ["kt", "qn", "wk", "wkf", "jsq", "cs"]:
-        return IntelligentClimate(device_info, intelligence, dps_mapper, **kwargs)
+        return IntelligentClimate(device_info, intelligence, dps_mapper, auth_manager, **kwargs)
 
     # Cover categories
     elif category in ["cl"]:
-        return IntelligentCover(device_info, intelligence, dps_mapper, **kwargs)
+        return IntelligentCover(device_info, intelligence, dps_mapper, auth_manager, **kwargs)
 
     # Default to base IntelligentDevice
     else:
-        return IntelligentDevice(device_info, intelligence, dps_mapper, **kwargs)
+        return IntelligentDevice(device_info, intelligence, dps_mapper, auth_manager, **kwargs)

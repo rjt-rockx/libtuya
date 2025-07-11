@@ -7,22 +7,22 @@ identify issues and monitor system health across all components.
 
 import asyncio
 import logging
+import platform
 import socket
+import subprocess
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
-import subprocess
-import platform
 
 from .exceptions import (
-    NetworkError,
-    ConnectivityError,
-    DNSError,
-    TimeoutError,
     AuthenticationError,
+    ConnectivityError,
     DeviceConnectionError,
+    DNSError,
+    NetworkError,
+    TimeoutError,
     TuyaError,
 )
 
@@ -127,12 +127,9 @@ class BaseDiagnostic(ABC):
             "name": self.name,
             "run_count": self.run_count,
             "failure_count": self.failure_count,
-            "success_rate": (self.run_count - self.failure_count)
-            / max(self.run_count, 1),
-            "last_status": (
-                self.last_result.status.value if self.last_result else "never_run"
-            ),
-            "last_run": self.last_result.timestamp if self.last_result else None,
+            "success_rate": (self.run_count - self.failure_count) / max(self.run_count, 1),
+            "last_status": (self.last_result.status.value if self.last_result else "never_run"),
+            "last_run": (self.last_result.timestamp if self.last_result else None),
         }
 
 
@@ -216,9 +213,7 @@ class NetworkDiagnostics(BaseDiagnostic):
                 # Use socket to test connectivity
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(5)
-                result = sock.connect_ex(
-                    (host, 80 if not host.startswith("openapi") else 443)
-                )
+                result = sock.connect_ex((host, 80 if not host.startswith("openapi") else 443))
                 sock.close()
 
                 if result == 0:
@@ -241,9 +236,7 @@ class NetworkDiagnostics(BaseDiagnostic):
             "failed_hosts": [],
         }
 
-        dns_hosts = [
-            host for host in self.test_hosts if not host.replace(".", "").isdigit()
-        ]
+        dns_hosts = [host for host in self.test_hosts if not host.replace(".", "").isdigit()]
 
         for host in dns_hosts:
             try:
@@ -264,8 +257,8 @@ class NetworkDiagnostics(BaseDiagnostic):
         """Check network latency using ping."""
         results = {
             "ping_results": {},
-            "average_latency": 0,
-            "max_latency": 0,
+            "average_latency": 0.0,
+            "max_latency": 0.0,
             "min_latency": float("inf"),
             "failed_pings": [],
         }
@@ -283,7 +276,9 @@ class NetworkDiagnostics(BaseDiagnostic):
                     cmd = ["ping", "-c", "3", host]
 
                 process = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
 
                 stdout, stderr = await process.communicate()
@@ -295,8 +290,10 @@ class NetworkDiagnostics(BaseDiagnostic):
                         results["ping_results"][host] = latency
                         total_latency += latency
                         successful_pings += 1
-                        results["max_latency"] = max(results["max_latency"], latency)
-                        results["min_latency"] = min(results["min_latency"], latency)
+                        current_max = float(results["max_latency"])
+                        current_min = float(results["min_latency"])
+                        results["max_latency"] = max(current_max, latency)
+                        results["min_latency"] = min(current_min, latency)
                 else:
                     results["failed_pings"].append(f"{host}: ping failed")
 
@@ -326,7 +323,7 @@ class NetworkDiagnostics(BaseDiagnostic):
                     # Extract from individual ping lines
                     time_part = line.split("time=")[1].split()[0]
                     return float(time_part.replace("ms", ""))
-        except:
+        except BaseException:
             pass
         return 0
 
@@ -374,7 +371,11 @@ class DeviceDiagnostics(BaseDiagnostic):
     def add_device(self, device_id: str, device_ip: str, local_key: str):
         """Add a device to check."""
         self.devices_to_check.append(
-            {"device_id": device_id, "device_ip": device_ip, "local_key": local_key}
+            {
+                "device_id": device_id,
+                "device_ip": device_ip,
+                "local_key": local_key,
+            }
         )
 
     async def run_check(self) -> DiagnosticResult:
@@ -439,7 +440,11 @@ class DeviceDiagnostics(BaseDiagnostic):
 
     async def _check_device_reachability(self) -> Dict[str, Any]:
         """Check if devices are reachable on the network."""
-        results = {"reachable_devices": [], "unreachable_devices": [], "ping_times": {}}
+        results = {
+            "reachable_devices": [],
+            "unreachable_devices": [],
+            "ping_times": {},
+        }
 
         for device in self.devices_to_check:
             device_id = device["device_id"]
@@ -562,9 +567,7 @@ class DeviceDiagnostics(BaseDiagnostic):
 
                 if response_time is not None:
                     end_time = time.time()
-                    actual_response_time = (
-                        end_time - start_time
-                    ) * 1000  # Convert to ms
+                    actual_response_time = (end_time - start_time) * 1000  # Convert to ms
 
                     results["responsive_devices"].append(device_id)
                     results["response_times"][device_id] = actual_response_time
@@ -586,15 +589,11 @@ class DeviceDiagnostics(BaseDiagnostic):
 
         # Calculate average response time
         if successful_responses > 0:
-            results["average_response_time"] = (
-                total_response_time / successful_responses
-            )
+            results["average_response_time"] = total_response_time / successful_responses
 
         return results
 
-    async def _test_device_communication(
-        self, device: Dict[str, Any]
-    ) -> Optional[float]:
+    async def _test_device_communication(self, device: Dict[str, Any]) -> Optional[float]:
         """Test communication with a single device."""
         device_id = device.get("device_id", "unknown")
         local_key = device.get("local_key")
@@ -728,9 +727,7 @@ class AuthenticationDiagnostics(BaseDiagnostic):
 
                     # Calculate expiration time
                     current_time = time.time()
-                    expires_at = session.t + (
-                        session.expires_in * 60
-                    )  # Convert to timestamp
+                    expires_at = session.t + (session.expires_in * 60)  # Convert to timestamp
                     results["expires_at"] = expires_at
 
                     # Check if expires soon (within 10 minutes)
@@ -770,15 +767,11 @@ class AuthenticationDiagnostics(BaseDiagnostic):
         try:
             import aiohttp
 
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 for endpoint in api_endpoints:
                     try:
                         start_time = time.time()
-                        async with session.get(
-                            f"{endpoint}/health", ssl=False
-                        ) as response:
+                        async with session.get(f"{endpoint}/health", ssl=False) as response:
                             response_time = (time.time() - start_time) * 1000
 
                             if (
@@ -852,9 +845,7 @@ class AuthenticationDiagnostics(BaseDiagnostic):
                             "reachable": False,
                             "error": f"Socket error: {result}",
                         }
-                        results["failed_endpoints"].append(
-                            f"{endpoint}: Socket error {result}"
-                        )
+                        results["failed_endpoints"].append(f"{endpoint}: Socket error {result}")
 
                 except Exception as e:
                     results["api_endpoints"][endpoint] = {
@@ -982,9 +973,7 @@ class SystemDiagnostics(BaseDiagnostic):
         )
         total_subsystems = len(subsystem_results)
 
-        message = (
-            f"System health: {healthy_subsystems}/{total_subsystems} subsystems healthy"
-        )
+        message = f"System health: {healthy_subsystems}/{total_subsystems} subsystems healthy"
 
         return DiagnosticResult(
             check_name=self.name,
@@ -998,7 +987,7 @@ class SystemDiagnostics(BaseDiagnostic):
 
     async def _check_system_resources(self) -> Dict[str, Any]:
         """Check system resource usage."""
-        results = {"memory_usage": 0, "disk_usage": 0, "cpu_usage": 0}
+        results: Dict[str, Any] = {"memory_usage": 0.0, "disk_usage": 0.0, "cpu_usage": 0.0}
 
         try:
             import psutil
@@ -1024,7 +1013,7 @@ class SystemDiagnostics(BaseDiagnostic):
 
     async def _check_python_environment(self) -> Dict[str, Any]:
         """Check Python environment."""
-        results = {
+        results: Dict[str, Any] = {
             "python_version": platform.python_version(),
             "platform": platform.platform(),
             "architecture": platform.architecture()[0],
@@ -1132,9 +1121,7 @@ class HealthMonitor:
             try:
                 result = await task
                 results[name] = result
-                logger.debug(
-                    f"Diagnostic {name}: {result.status.value} - {result.message}"
-                )
+                logger.debug(f"Diagnostic {name}: {result.status.value} - {result.message}")
             except Exception as e:
                 logger.error(f"Diagnostic {name} failed: {e}")
                 results[name] = DiagnosticResult(
@@ -1228,9 +1215,7 @@ class HealthMonitor:
 
     def get_diagnostic_stats(self) -> Dict[str, Any]:
         """Get statistics for all diagnostics."""
-        return {
-            diagnostic.name: diagnostic.get_stats() for diagnostic in self.diagnostics
-        }
+        return {diagnostic.name: diagnostic.get_stats() for diagnostic in self.diagnostics}
 
 
 # Global health monitor instance

@@ -1,24 +1,15 @@
-# LibTuya - Just Works Tuya Integration
+# libtuya
 
-A Python library that provides seamless Tuya device control by combining the authentication capabilities of `tuya-device-sharing-sdk`, the device intelligence of Home Assistant's Tuya integration, and the fast local control of TinyTuya.
-
-## Key Features
-
-- **🔐 Zero-config Authentication**: QR code authentication eliminates the need for developer accounts
-- **🧠 Intelligent Device Control**: Leverages Home Assistant's device intelligence for 316 DPCode definitions
-- **⚡ Fast Local Control**: Automatic local key extraction enables millisecond response times
-- **🎯 Just Works**: No manual configuration, device keys, or complex setup required
-- **🛠️ Multiple Interfaces**: CLI tool, REST API, and Python library
-- **📦 Smart Caching**: Device information cached for instant access
-- **🔍 Flexible Device Lookup**: Control devices by number, name, or ID
-- **🔄 Session Persistence**: Authentication persists across CLI sessions
+A Python library that provides seamless Tuya device control by combining the authentication capabilities of [tuya-device-sharing-sdk](https://github.com/tuya/tuya-device-sharing-sdk), the device intelligence of [Home Assistant](https://github.com/home-assistant/core), and the fast local control of [TinyTuya](https://github.com/jasonacox/tinytuya).
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-pip install libtuya
+git clone https://github.com/rjt-herschel/libtuya.git
+cd libtuya
+pip install -e .
 ```
 
 ### CLI Usage
@@ -60,13 +51,13 @@ async def main():
     authenticator = TuyaAuthenticator()
     qr_code = authenticator.start_qr_auth("my-session")
     print(f"Scan QR code: {qr_code}")
-    
+
     session = await authenticator.wait_for_auth_async()
-    
+
     # Discover and control devices
     manager = DeviceManager()
     devices = await manager.discover_devices(session)
-    
+
     for device in devices:
         print(f"Device: {device.name}")
         await device.turn_on()
@@ -74,47 +65,6 @@ async def main():
 
 asyncio.run(main())
 ```
-
-## Architecture
-
-LibTuya consists of four main components:
-
-1. **Device Intelligence Database** (`libtuya.intelligence`)
-   - 316 DPCode definitions from Home Assistant
-   - Device category mappings for 60+ device types
-   - Value scaling and conversion logic
-   - Device-specific quirks and edge cases
-
-2. **Authentication System** (`libtuya.auth`)
-   - QR code authentication flow
-   - Automatic local key extraction
-   - Session management and token refresh
-   - Uses Home Assistant's client ID for compatibility
-
-3. **DPS Discovery Engine** (`libtuya.dps`)
-   - Bulletproof DPS mapping heuristics
-   - Capability-to-DPS index mapping
-   - Handles unknown devices gracefully
-   - Confidence scoring and fallback strategies
-
-4. **Intelligent Device Factory** (`libtuya.devices`)
-   - Combines cloud discovery with local control
-   - Automatic device class selection
-   - High-level control methods
-   - Error recovery and resilience
-   - Smart caching for faster response
-   - Device name/number resolution
-
-## Supported Devices
-
-LibTuya supports all major Tuya device categories:
-
-- **Lights** (`dj`): Brightness, color, color temperature, scenes
-- **Switches** (`kg`): On/off, power monitoring, multi-channel
-- **Climate** (`wk`): Temperature, humidity, mode control
-- **Covers** (`cl`): Position, movement, calibration
-- **Sensors** (`pir`, `mcs`): Motion, door/window, environmental
-- **Appliances** (`fs`, `jsq`): Fans, humidifiers, specialized controls
 
 ## Command Reference
 
@@ -164,19 +114,9 @@ tuya info DEVICE --json               # Output as JSON
 ### Setup Development Environment
 
 ```bash
-git clone https://github.com/libtuya/libtuya.git
+git clone https://github.com/rjt-herschel/libtuya.git
 cd libtuya
 pip install -e ".[dev]"
-```
-
-### Run Tests
-
-```bash
-pytest tests/                        # Run all tests
-pytest tests/intelligence/           # Test device intelligence
-pytest tests/auth/                   # Test authentication
-pytest tests/devices/                # Test device control
-pytest tests/dps/                    # Test DPS mapping
 ```
 
 ### Code Quality
@@ -186,71 +126,3 @@ black libtuya/                       # Format code
 flake8 libtuya/                      # Lint code
 mypy libtuya/                        # Type checking
 ```
-
-## Project Structure
-
-```text
-libtuya/
-├── libtuya/
-│   ├── __init__.py                  # Main package exports
-│   ├── cli.py                       # Command-line interface
-│   ├── auth/                        # Authentication system
-│   │   ├── __init__.py
-│   │   ├── qr_auth.py              # QR code authentication
-│   │   ├── manager.py              # Device discovery
-│   │   └── models.py               # Data structures
-│   ├── intelligence/               # Device intelligence database
-│   │   ├── __init__.py
-│   │   ├── dpcodes.py              # DPCode definitions
-│   │   ├── device_mappings.py      # Category mappings
-│   │   ├── scaling.py              # Value scaling
-│   │   └── quirks.py               # Device quirks
-│   ├── dps/                        # DPS discovery engine
-│   │   ├── __init__.py
-│   │   ├── mapping_rules.py        # Mapping heuristics
-│   │   ├── discovery.py            # TinyTuya discovery
-│   │   └── mapper.py               # Main mapping interface
-│   ├── devices/                    # Device factory pattern
-│   │   ├── __init__.py
-│   │   ├── factory.py              # Device factory
-│   │   ├── intelligent_device.py   # Core device wrapper
-│   │   └── device_types.py         # Specialized devices
-│   └── recovery/                   # Error recovery system
-│       ├── __init__.py
-│       ├── exceptions.py           # Custom exceptions
-│       ├── retry_strategies.py     # Retry logic
-│       ├── error_handlers.py       # Recovery handlers
-│       └── diagnostics.py          # Health monitoring
-├── tests/                          # Test suite
-├── examples/                       # Usage examples
-├── intelligence/                   # Extracted HA intelligence
-├── analysis/                       # Design analysis
-├── setup.py                        # Package setup
-└── requirements.txt                # Dependencies
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- **Home Assistant Community** - Device intelligence and compatibility data
-- **TinyTuya Project** - Local device control capabilities
-- **Tuya Inc.** - Device sharing SDK and cloud integration
-- **Python Community** - Excellent libraries and tools
-
-## Support
-
-- 📖 [Documentation](https://libtuya.readthedocs.io)
-- 🐛 [Bug Reports](https://github.com/libtuya/libtuya/issues)
-- 💬 [Discussions](https://github.com/libtuya/libtuya/discussions)
-- 📧 [Email Support](mailto:support@libtuya.dev)

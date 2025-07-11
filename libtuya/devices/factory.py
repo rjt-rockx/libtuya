@@ -7,13 +7,13 @@ from Home Assistant's Tuya integration.
 """
 
 import logging
-from typing import Dict, Optional, Type, Any, Union
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Type, Union
 
 # Import TinyTuya device classes
 try:
     import tinytuya
-    from tinytuya import Device, BulbDevice, OutletDevice, CoverDevice
+    from tinytuya import BulbDevice, CoverDevice, Device, OutletDevice
 
     TINYTUYA_AVAILABLE = True
 except ImportError:
@@ -36,6 +36,7 @@ except ImportError:
 
 # Import libtuya components
 from ..auth.models import DeviceInfo
+from ..intelligence.quirks import quirks_manager
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +64,18 @@ class DeviceFactory:
         # Light categories -> BulbDevice
         "dj": DeviceClassMapping(
             tinytuya_class=BulbDevice,
-            capabilities=["switch_led", "bright_value", "colour_data", "temp_value"],
-            typical_dps={1: "switch", 3: "brightness", 5: "color", 4: "color_temp"},
+            capabilities=[
+                "switch_led",
+                "bright_value",
+                "colour_data",
+                "temp_value",
+            ],
+            typical_dps={
+                1: "switch",
+                3: "brightness",
+                5: "color",
+                4: "color_temp",
+            },
             description="Smart Light/Bulb",
         ),
         "dc": DeviceClassMapping(
@@ -113,7 +124,12 @@ class DeviceFactory:
         "pc": DeviceClassMapping(
             tinytuya_class=OutletDevice,
             capabilities=["switch", "cur_power", "cur_voltage", "cur_current"],
-            typical_dps={1: "switch", 18: "power", 19: "voltage", 20: "current"},
+            typical_dps={
+                1: "switch",
+                18: "power",
+                19: "voltage",
+                20: "current",
+            },
             description="Power Socket",
         ),
         "cz": DeviceClassMapping(
@@ -139,7 +155,12 @@ class DeviceFactory:
         "kt": DeviceClassMapping(
             tinytuya_class=Device,
             capabilities=["switch", "temp_set", "temp_current", "mode"],
-            typical_dps={1: "switch", 2: "temp_set", 3: "temp_current", 4: "mode"},
+            typical_dps={
+                1: "switch",
+                2: "temp_set",
+                3: "temp_current",
+                4: "mode",
+            },
             description="Air Conditioner",
         ),
         "qn": DeviceClassMapping(
@@ -151,7 +172,12 @@ class DeviceFactory:
         "wk": DeviceClassMapping(
             tinytuya_class=Device,
             capabilities=["switch", "temp_set", "temp_current", "mode"],
-            typical_dps={1: "switch", 2: "temp_set", 3: "temp_current", 4: "mode"},
+            typical_dps={
+                1: "switch",
+                2: "temp_set",
+                3: "temp_current",
+                4: "mode",
+            },
             description="Thermostat",
         ),
         "wkf": DeviceClassMapping(
@@ -202,7 +228,11 @@ class DeviceFactory:
         "jsq": DeviceClassMapping(
             tinytuya_class=Device,
             capabilities=["switch", "humidity_set", "humidity_current"],
-            typical_dps={1: "switch", 2: "humidity_set", 3: "humidity_current"},
+            typical_dps={
+                1: "switch",
+                2: "humidity_set",
+                3: "humidity_current",
+            },
             description="Humidifier",
         ),
         "kj": DeviceClassMapping(
@@ -214,7 +244,11 @@ class DeviceFactory:
         "cs": DeviceClassMapping(
             tinytuya_class=Device,
             capabilities=["switch", "humidity_set", "humidity_current"],
-            typical_dps={1: "switch", 2: "humidity_set", 3: "humidity_current"},
+            typical_dps={
+                1: "switch",
+                2: "humidity_set",
+                3: "humidity_current",
+            },
             description="Dehumidifier",
         ),
         # Additional categories from HA
@@ -295,9 +329,7 @@ class DeviceFactory:
         # Cache for created devices
         self._device_cache: Dict[str, Device] = {}
 
-        logger.info(
-            f"DeviceFactory initialized with TinyTuya available: {TINYTUYA_AVAILABLE}"
-        )
+        logger.info(f"DeviceFactory initialized with TinyTuya available: {TINYTUYA_AVAILABLE}")
 
     def create_device(
         self,
@@ -328,7 +360,7 @@ class DeviceFactory:
         # Get device mapping
         mapping = self.get_device_mapping(device_info.category)
         if not mapping:
-            logger.warning(
+            logger.debug(
                 f"Unknown device category '{device_info.category}', using generic Device class"
             )
             mapping = DeviceClassMapping(
@@ -367,9 +399,7 @@ class DeviceFactory:
             # Cache the device
             self._device_cache[device_info.id] = device
 
-            logger.debug(
-                f"Created {mapping.description} device for {device_info.name}"
-            )
+            logger.debug(f"Created {mapping.description} device for {device_info.name}")
             return device
 
         except Exception as e:
@@ -462,6 +492,251 @@ class DeviceFactory:
             "total_categories": len(self.DEVICE_MAPPINGS),
         }
 
+    def detect_multi_entity_device(self, device_info: DeviceInfo) -> Dict[str, Any]:
+        """
+        Detect if a device is a multi-entity device and determine entity structure.
+
+        Args:
+            device_info: Device information from cloud discovery
+
+        Returns:
+            Dictionary containing multi-entity detection results
+        """
+        detection_result = {
+            "is_multi_entity": False,
+            "entity_count": 1,
+            "entity_definitions": [],
+            "pattern_info": None,
+            "confidence": 0.0,
+        }
+
+        # Try to get available DPS from device status
+        available_dps = []
+        if device_info.status and isinstance(device_info.status, dict):
+            # Extract DPS indices from status
+            for key in device_info.status.keys():
+                try:
+                    dps = int(key)
+                    available_dps.append(dps)
+                except ValueError:
+                    continue
+
+        # If no DPS available from status, try common patterns for the category
+        if not available_dps:
+            mapping = self.get_device_mapping(device_info.category)
+            if mapping and mapping.typical_dps:
+                available_dps = list(mapping.typical_dps.keys())
+
+        # Detect multi-entity patterns using quirks manager
+        if available_dps:
+            pattern_detection = quirks_manager.detect_multi_entity_pattern(
+                available_dps, device_info.category
+            )
+
+            if pattern_detection and pattern_detection.get("confidence", 0) >= 0.6:
+                detection_result.update(
+                    {
+                        "is_multi_entity": True,
+                        "entity_count": pattern_detection.get("entity_count_estimate", 1),
+                        "pattern_info": pattern_detection,
+                        "confidence": pattern_detection.get("confidence", 0),
+                    }
+                )
+
+                # Generate entity definitions based on detected patterns
+                detection_result["entity_definitions"] = self._generate_entity_definitions(
+                    pattern_detection, device_info, available_dps
+                )
+
+        # Check legacy multi-entity devices from quirks
+        if not detection_result["is_multi_entity"]:
+            legacy_entities = quirks_manager.get_multi_entity_mappings(device_info.category)
+            if legacy_entities:
+                detection_result.update(
+                    {
+                        "is_multi_entity": True,
+                        "entity_count": len(legacy_entities),
+                        "entity_definitions": [
+                            {
+                                "entity_id": f"{device_info.id}_{i}",
+                                "name": f"{device_info.name} {entity.key}",
+                                "type": entity.entity_type,
+                                "primary_capability": entity.key,
+                                "brightness_capability": entity.brightness_dpcode,
+                                "category": "primary",
+                            }
+                            for i, entity in enumerate(legacy_entities)
+                        ],
+                        "confidence": 0.8,
+                    }
+                )
+
+        return detection_result
+
+    def _generate_entity_definitions(
+        self,
+        pattern_detection: Dict[str, Any],
+        device_info: DeviceInfo,
+        available_dps: List[int],
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate entity definitions based on detected patterns.
+
+        Args:
+            pattern_detection: Result from pattern detection
+            device_info: Original device info
+            available_dps: Available DPS indices
+
+        Returns:
+            List of entity definitions
+        """
+        entity_definitions = []
+
+        for pattern in pattern_detection.get("detected_patterns", []):
+            pattern_type = pattern.get("pattern_type")
+
+            if pattern_type == "multi_gang_switch":
+                # Create switch entities
+                switch_dps = pattern.get("switch_dps", [])
+                for i, switch_dps_idx in enumerate(switch_dps):
+                    entity_definitions.append(
+                        {
+                            "entity_id": f"{device_info.id}_switch_{i + 1}",
+                            "name": f"{device_info.name} Switch {i + 1}",
+                            "type": "switch",
+                            "primary_capability": "switch",
+                            "dps_index": switch_dps_idx,
+                            "category": "primary",
+                        }
+                    )
+
+                # Create timer entities if present
+                timer_dps = pattern.get("timer_dps", [])
+                for i, timer_dps_idx in enumerate(timer_dps):
+                    if timer_dps_idx in available_dps:
+                        entity_definitions.append(
+                            {
+                                "entity_id": f"{device_info.id}_timer_{i + 1}",
+                                "name": f"{device_info.name} Timer {i + 1}",
+                                "type": "number",
+                                "primary_capability": "timer",
+                                "dps_index": timer_dps_idx,
+                                "category": "config",
+                            }
+                        )
+
+            elif pattern_type == "energy_monitoring":
+                # Create energy monitoring entities
+                matched_dps = pattern.get("matched_dps", [])
+                subtype = pattern.get("subtype", "single_phase")
+
+                if subtype == "single_phase":
+                    for dps in matched_dps:
+                        capability = self._map_energy_dps_to_capability(dps)
+                        if capability:
+                            entity_definitions.append(
+                                {
+                                    "entity_id": f"{device_info.id}_{capability}",
+                                    "name": f"{device_info.name} {capability.title()}",
+                                    "type": "sensor",
+                                    "primary_capability": capability,
+                                    "dps_index": dps,
+                                    "category": "primary",
+                                }
+                            )
+                elif subtype == "three_phase":
+                    # Group by phases
+                    phase_mapping = {
+                        103: ("voltage", "A"),
+                        104: ("current", "A"),
+                        105: ("power", "A"),
+                        109: ("energy", "A"),
+                        113: ("voltage", "B"),
+                        114: ("current", "B"),
+                        115: ("power", "B"),
+                        119: ("energy", "B"),
+                        123: ("voltage", "C"),
+                        124: ("current", "C"),
+                        125: ("power", "C"),
+                        129: ("energy", "C"),
+                    }
+
+                    for dps in matched_dps:
+                        if dps in phase_mapping:
+                            capability, phase = phase_mapping[dps]
+                            entity_definitions.append(
+                                {
+                                    "entity_id": f"{device_info.id}_{capability}_phase_{phase.lower()}",
+                                    "name": f"{device_info.name} {capability.title()} Phase {phase}",
+                                    "type": "sensor",
+                                    "primary_capability": f"{capability}_phase_{phase.lower()}",
+                                    "dps_index": dps,
+                                    "category": "primary",
+                                }
+                            )
+
+            elif pattern_type == "fan_light_combo":
+                # Create light entity
+                light_dps = pattern.get("light_dps", [])
+                if light_dps:
+                    entity_definitions.append(
+                        {
+                            "entity_id": f"{device_info.id}_light",
+                            "name": f"{device_info.name} Light",
+                            "type": "light",
+                            "primary_capability": "switch_led",
+                            "dps_indices": light_dps,
+                            "category": "primary",
+                        }
+                    )
+
+                # Create fan entity
+                fan_dps = pattern.get("fan_dps", [])
+                if fan_dps:
+                    entity_definitions.append(
+                        {
+                            "entity_id": f"{device_info.id}_fan",
+                            "name": f"{device_info.name} Fan",
+                            "type": "fan",
+                            "primary_capability": "switch",
+                            "dps_indices": fan_dps,
+                            "category": "primary",
+                        }
+                    )
+
+            elif pattern_type == "complex_lighting":
+                # Create main light entity with advanced features
+                lighting_dps = pattern.get("lighting_dps", [])
+                entity_definitions.append(
+                    {
+                        "entity_id": f"{device_info.id}_light",
+                        "name": f"{device_info.name} Advanced Light",
+                        "type": "light",
+                        "primary_capability": "switch_led",
+                        "dps_indices": lighting_dps,
+                        "category": "primary",
+                        "features": [
+                            "brightness",
+                            "color",
+                            "effects",
+                            "scenes",
+                        ],
+                    }
+                )
+
+        return entity_definitions
+
+    def _map_energy_dps_to_capability(self, dps: int) -> Optional[str]:
+        """Map energy monitoring DPS to capability name."""
+        energy_mapping = {
+            103: "voltage",
+            104: "current",
+            105: "power",
+            109: "total_energy",
+            110: "power_factor",
+        }
+        return energy_mapping.get(dps)
+
     def validate_device_info(self, device_info: DeviceInfo) -> Dict[str, Any]:
         """
         Validate device information before creating device.
@@ -488,7 +763,8 @@ class DeviceFactory:
         # Check category support
         mapping = self.get_device_mapping(device_info.category)
         if not mapping:
-            warnings.append(
+            # Unknown category is common and not an error - just log at debug level
+            logger.debug(
                 f"Unknown device category '{device_info.category}', will use generic Device class"
             )
 
@@ -504,9 +780,7 @@ class DeviceFactory:
             "errors": errors,
             "warnings": warnings,
             "category_supported": mapping is not None,
-            "category_info": (
-                self.get_category_info(device_info.category) if mapping else None
-            ),
+            "category_info": (self.get_category_info(device_info.category) if mapping else None),
         }
 
 

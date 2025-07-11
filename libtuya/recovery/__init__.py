@@ -34,77 +34,77 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Union
 
-# Import all exception types
-from .exceptions import (
-    TuyaError,
-    AuthenticationError,
-    QRCodeError,
-    TokenError,
-    DeviceConnectionError,
-    LocalKeyError,
-    IPDiscoveryError,
-    DPSMappingError,
-    UnknownDeviceError,
-    CapabilityMismatchError,
-    ProtocolError,
-    VersionDetectionError,
-    CommandError,
-    NetworkError,
-    ConnectivityError,
-    DNSError,
-    TimeoutError,
-    DeviceError,
-    HardwareError,
-    FirmwareError,
-    ConfigurationError,
-    get_error_category,
-    is_retryable_error,
-    EXCEPTION_HIERARCHY,
-)
-
-# Import retry strategies
-from .retry_strategies import (
-    RetryManager,
-    RetryConfig,
-    BackoffStrategy,
-    ExponentialBackoff,
-    LinearBackoff,
-    FixedBackoff,
-    CircuitBreaker,
-    CircuitBreakerState,
-    CircuitBreakerConfig,
-    TimeoutManager,
-    default_retry_manager,
-    retry,
-    async_retry,
-    RETRY_CONFIGS,
-    CIRCUIT_BREAKER_CONFIGS,
+# Import diagnostics
+from .diagnostics import (
+    AuthenticationDiagnostics,
+    BaseDiagnostic,
+    DeviceDiagnostics,
+    DiagnosticResult,
+    HealthMonitor,
+    HealthStatus,
+    NetworkDiagnostics,
+    SystemDiagnostics,
+    default_health_monitor,
 )
 
 # Import error handlers
 from .error_handlers import (
-    RecoveryResult,
-    BaseRecoveryHandler,
     AuthenticationRecovery,
+    BaseRecoveryHandler,
     DeviceConnectionRecovery,
     DPSMappingRecovery,
-    ProtocolRecovery,
     NetworkRecovery,
+    ProtocolRecovery,
     RecoveryCoordinator,
+    RecoveryResult,
     default_recovery_coordinator,
 )
 
-# Import diagnostics
-from .diagnostics import (
-    HealthStatus,
-    DiagnosticResult,
-    BaseDiagnostic,
-    NetworkDiagnostics,
-    DeviceDiagnostics,
-    AuthenticationDiagnostics,
-    SystemDiagnostics,
-    HealthMonitor,
-    default_health_monitor,
+# Import all exception types
+from .exceptions import (
+    EXCEPTION_HIERARCHY,
+    AuthenticationError,
+    CapabilityMismatchError,
+    CommandError,
+    ConfigurationError,
+    ConnectivityError,
+    DeviceConnectionError,
+    DeviceError,
+    DNSError,
+    DPSMappingError,
+    FirmwareError,
+    HardwareError,
+    IPDiscoveryError,
+    LocalKeyError,
+    NetworkError,
+    ProtocolError,
+    QRCodeError,
+    TimeoutError,
+    TokenError,
+    TuyaError,
+    UnknownDeviceError,
+    VersionDetectionError,
+    get_error_category,
+    is_retryable_error,
+)
+
+# Import retry strategies
+from .retry_strategies import (
+    CIRCUIT_BREAKER_CONFIGS,
+    RETRY_CONFIGS,
+    BackoffStrategy,
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitBreakerState,
+    ExponentialBackoff,
+    FixedBackoff,
+    LinearBackoff,
+    RetryConfig,
+    RetryManager,
+    TimeoutManager,
+    async_retry,
+    default_retry_manager,
+    retry,
 )
 
 logger = logging.getLogger(__name__)
@@ -200,9 +200,7 @@ class RecoveryManager:
             self.recovery_stats["fallback_used"] += 1
 
         if self.enable_logging:
-            logger.info(
-                f"Recovery {'succeeded' if result.success else 'failed'}: {result.message}"
-            )
+            logger.info(f"Recovery {'succeeded' if result.success else 'failed'}: {result.message}")
 
         return result
 
@@ -228,7 +226,10 @@ class RecoveryManager:
         return self.recover_from_error(error, context)
 
     def recover_device_connection(
-        self, error: DeviceConnectionError, device=None, force_rediscovery: bool = False
+        self,
+        error: DeviceConnectionError,
+        device=None,
+        force_rediscovery: bool = False,
     ) -> RecoveryResult:
         """
         Recover from device connection errors.
@@ -246,7 +247,9 @@ class RecoveryManager:
         return self.recover_from_error(error, context)
 
     def recover_dps_mapping(
-        self, error: DPSMappingError, device_info: Optional[Dict[str, Any]] = None
+        self,
+        error: DPSMappingError,
+        device_info: Optional[Dict[str, Any]] = None,
     ) -> RecoveryResult:
         """
         Recover from DPS mapping errors.
@@ -263,7 +266,10 @@ class RecoveryManager:
         return self.recover_from_error(error, context)
 
     def recover_protocol_error(
-        self, error: ProtocolError, device=None, suggested_version: Optional[str] = None
+        self,
+        error: ProtocolError,
+        device=None,
+        suggested_version: Optional[str] = None,
     ) -> RecoveryResult:
         """
         Recover from protocol errors.
@@ -307,9 +313,7 @@ class RecoveryManager:
         if not retry_config:
             retry_config = RETRY_CONFIGS["network_operation"]
 
-        return self.retry_manager.retry_sync(
-            func, retry_config, operation_name=operation_name
-        )
+        return self.retry_manager.retry_sync(func, retry_config, operation_name=operation_name)
 
     async def with_async_retry(
         self,
@@ -438,12 +442,8 @@ class RecoveryManager:
         return {
             **self.recovery_stats,
             "uptime": uptime,
-            "success_rate": (
-                self.recovery_stats["successful_recoveries"] / max(total_attempts, 1)
-            ),
-            "fallback_rate": (
-                self.recovery_stats["fallback_used"] / max(total_attempts, 1)
-            ),
+            "success_rate": (self.recovery_stats["successful_recoveries"] / max(total_attempts, 1)),
+            "fallback_rate": (self.recovery_stats["fallback_used"] / max(total_attempts, 1)),
             "retry_stats": self.retry_manager.get_retry_stats(),
             "coordinator_stats": self.recovery_coordinator.get_recovery_stats(),
         }

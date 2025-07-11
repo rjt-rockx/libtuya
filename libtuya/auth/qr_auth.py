@@ -6,13 +6,12 @@ tuya-device-sharing-sdk LoginControl class. It handles QR code generation,
 user scanning, and OAuth-like token exchange.
 """
 
+import logging
 import time
 import uuid
-import logging
-from typing import Optional, Tuple, Dict, Any
-from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 
-from .models import QRCodeData, AuthSession, AuthenticationError
+from .models import AuthenticationError, AuthSession, QRCodeData
 
 logger = logging.getLogger(__name__)
 
@@ -60,23 +59,30 @@ class QRAuthenticator:
         Generate QR code for authentication.
 
         Args:
-            user_code: Optional user code. If None, generates unique code.
+            user_code: User code required for authentication.
 
         Returns:
             QRCodeData containing QR code and polling token
 
         Raises:
-            AuthenticationError: If QR code generation fails
+            AuthenticationError: If QR code generation fails or user_code is None
         """
         self._ensure_login_control()
 
         if user_code is None:
-            user_code = str(uuid.uuid4())
+            raise AuthenticationError(
+                "User code is required for QR code generation",
+                "USER_CODE_REQUIRED"
+            )
 
         try:
             logger.info("Generating QR code for authentication")
+            if self.login_control is None:
+                raise AuthenticationError("LoginControl not initialized", "INIT_ERROR")
             response = self.login_control.qr_code(
-                client_id=self.CLIENT_ID, schema=self.SCHEMA, user_code=user_code
+                client_id=self.CLIENT_ID,
+                schema=self.SCHEMA,
+                user_code=user_code,
             )
 
             if not response.get("success", False):
@@ -88,7 +94,7 @@ class QRAuthenticator:
 
             result = response.get("result", {})
             qr_code = result.get("qrcode", "")
-            
+
             # In the current API, the QR code itself is used as the token for polling
             token = qr_code
 
@@ -100,7 +106,9 @@ class QRAuthenticator:
                 )
 
             qr_data = QRCodeData(
-                qr_code=qr_code, token=token, expires_in=result.get("expires_in", 600)
+                qr_code=qr_code,
+                token=token,
+                expires_in=result.get("expires_in", 600),
             )
 
             self._current_qr_data = qr_data
@@ -137,8 +145,12 @@ class QRAuthenticator:
 
         try:
             logger.debug("Checking login status")
+            if self.login_control is None:
+                raise AuthenticationError("LoginControl not initialized", "INIT_ERROR")
             success, result = self.login_control.login_result(
-                token=qr_data.token, client_id=self.CLIENT_ID, user_code=user_code
+                token=qr_data.token,
+                client_id=self.CLIENT_ID,
+                user_code=user_code,
             )
 
             if success:
@@ -147,16 +159,29 @@ class QRAuthenticator:
             else:
                 # Check if it's a temporary failure or permanent error
                 error_msg = result.get("msg", "Unknown error")
-                if "not scanned" in error_msg.lower() or "waiting" in error_msg.lower():
+                logger.debug(f"Login result: success={success}, msg='{error_msg}', full_result={result}")
+                
+                # Be more lenient about waiting states - most initial states should be treated as "waiting"
+                # Only throw exceptions for clearly permanent failures
+                if any(keyword in error_msg.lower() for keyword in [
+                    "not scanned", "waiting", "pending", "未扫描", "等待", 
+                    "scan", "please", "again", "try", "failed"  # "Login failed, please scan and try again!" should wait
+                ]):
                     logger.debug("Still waiting for user to scan QR code")
                     return False, None
                 else:
-                    logger.warning(f"Authentication failed: {error_msg}")
-                    raise AuthenticationError(
-                        f"Authentication failed: {error_msg}",
-                        "AUTH_FAILED",
-                        {"result": result},
-                    )
+                    # Only throw for clearly terminal errors
+                    if "expired" in error_msg.lower() or "invalid" in error_msg.lower():
+                        logger.warning(f"Authentication failed: {error_msg}")
+                        raise AuthenticationError(
+                            f"Authentication failed: {error_msg}",
+                            "AUTH_FAILED",
+                            {"result": result},
+                        )
+                    else:
+                        # Default to waiting for unknown states
+                        logger.debug(f"Unknown status '{error_msg}' - treating as waiting")
+                        return False, None
 
         except Exception as e:
             if isinstance(e, AuthenticationError):
@@ -201,12 +226,14 @@ class QRAuthenticator:
                     # Debug token info
                     expire_time_raw = token_info.get("expire_time", 0)
                     current_time = int(time.time() * 1000)
-                    logger.info(f"Token expire_time (raw): {expire_time_raw}, current_time: {current_time}")
-                    
+                    logger.info(
+                        f"Token expire_time (raw): {expire_time_raw}, current_time: {current_time}"
+                    )
+
                     # Convert expire_time from seconds-from-now to absolute timestamp in milliseconds
                     expire_time_absolute = current_time + (expire_time_raw * 1000)
                     logger.info(f"Token expire_time (absolute ms): {expire_time_absolute}")
-                    
+
                     # Create authentication session
                     session = AuthSession(
                         access_token=token_info.get("access_token", ""),
@@ -218,7 +245,7 @@ class QRAuthenticator:
                         user_code=user_code,
                         terminal_id=token_info.get("terminal_id", ""),
                     )
-                    
+
                     # Store endpoint if provided
                     if "endpoint" in token_info:
                         session.endpoint = token_info["endpoint"]
@@ -285,9 +312,7 @@ class QRAuthenticator:
         qr_data = self.generate_qr_code(user_code)
 
         # Wait for authentication
-        session = self.wait_for_authentication(
-            qr_data, user_code, timeout, poll_interval
-        )
+        session = self.wait_for_authentication(qr_data, user_code, timeout, poll_interval)
 
         logger.info("QR code authentication flow completed successfully")
         return qr_data, session

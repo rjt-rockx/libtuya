@@ -6,14 +6,14 @@ capabilities, extracted from Home Assistant's Tuya integration.
 """
 
 import json
-from typing import Dict, List, Optional, Set, Any
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 
 @dataclass
-class DeviceCapability:
-    """Represents a device capability with metadata."""
+class IntelligenceCapability:
+    """Represents a device capability with intelligence metadata."""
 
     name: str
     category: str
@@ -52,7 +52,7 @@ class DeviceMappingManager:
 
     def _load_data(self) -> None:
         """Load and cache device mapping data from JSON file."""
-        intelligence_dir = Path(__file__).parent.parent.parent / "intelligence"
+        intelligence_dir = Path(__file__).parent / "data"
         mappings_file = intelligence_dir / "device_mappings.json"
 
         with open(mappings_file, "r") as f:
@@ -63,6 +63,8 @@ class DeviceMappingManager:
 
     def _build_caches(self) -> None:
         """Build internal caches for fast lookups."""
+        if self._mappings_data is None:
+            return
         categories = self._mappings_data["categories"]
 
         for platform, platform_categories in categories.items():
@@ -73,7 +75,7 @@ class DeviceMappingManager:
                 device_category = DeviceCategory(
                     category_id=category_id,
                     name=category_data["name"],
-                    capabilities=category_data.get("capabilities", []), # Modified line
+                    capabilities=category_data.get("capabilities", []),  # Modified line
                     notes=category_data.get("notes"),
                     platform=platform,
                 )
@@ -83,7 +85,7 @@ class DeviceMappingManager:
                 self._platform_cache[platform][category_id] = device_category
 
                 # Index capabilities for reverse lookup
-                for capability in category_data.get("capabilities", []): # Modified line
+                for capability in category_data.get("capabilities", []):  # Modified line
                     if capability not in self._capability_index:
                         self._capability_index[capability] = []
                     self._capability_index[capability].append(category_id)
@@ -217,16 +219,12 @@ class DeviceMappingManager:
         candidate_categories = None
 
         for capability in capabilities:
-            categories_with_capability = set(
-                self.get_categories_with_capability(capability)
-            )
+            categories_with_capability = set(self.get_categories_with_capability(capability))
 
             if candidate_categories is None:
                 candidate_categories = categories_with_capability
             else:
-                candidate_categories = candidate_categories.intersection(
-                    categories_with_capability
-                )
+                candidate_categories = candidate_categories.intersection(categories_with_capability)
 
         return list(candidate_categories) if candidate_categories else []
 
@@ -255,13 +253,11 @@ class DeviceMappingManager:
         total_capabilities = len(self._capability_index)
 
         platform_counts = {
-            platform: len(categories)
-            for platform, categories in self._platform_cache.items()
+            platform: len(categories) for platform, categories in self._platform_cache.items()
         }
 
         capability_usage = {
-            capability: len(categories)
-            for capability, categories in self._capability_index.items()
+            capability: len(categories) for capability, categories in self._capability_index.items()
         }
 
         return {
@@ -288,7 +284,10 @@ class DeviceMappingManager:
         category = self.get_category(category_id)
 
         if not category:
-            return {"valid": False, "error": f"Category '{category_id}' not found"}
+            return {
+                "valid": False,
+                "error": f"Category '{category_id}' not found",
+            }
 
         actual_capabilities = set(category.capabilities)
         expected_capabilities_set = set(expected_capabilities)
@@ -314,7 +313,12 @@ COMMON_LIGHT_CAPABILITIES = [
     "work_mode",
 ]
 
-COMMON_SWITCH_CAPABILITIES = ["switch_1", "switch_2", "switch_3", "switch_backlight"]
+COMMON_SWITCH_CAPABILITIES = [
+    "switch_1",
+    "switch_2",
+    "switch_3",
+    "switch_backlight",
+]
 
 COMMON_SENSOR_CAPABILITIES = [
     "battery_percentage",

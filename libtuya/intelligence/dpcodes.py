@@ -7,13 +7,13 @@ Tuya integration, providing type-safe access to device capabilities.
 
 import json
 from enum import Enum
-from typing import Dict, List, Optional, Union, Any
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 
 def _load_dpcodes() -> Dict[str, str]:
     """Load DPCodes from the extracted JSON file."""
-    intelligence_dir = Path(__file__).parent.parent.parent / "intelligence"
+    intelligence_dir = Path(__file__).parent / "data"
     dpcodes_file = intelligence_dir / "dpcodes.json"
 
     with open(dpcodes_file, "r") as f:
@@ -113,7 +113,7 @@ class DPCodeManager:
 
     def _load_data(self) -> None:
         """Load and cache DPCode data from JSON file."""
-        intelligence_dir = Path(__file__).parent.parent.parent / "intelligence"
+        intelligence_dir = Path(__file__).parent / "data"
         dpcodes_file = intelligence_dir / "dpcodes.json"
 
         with open(dpcodes_file, "r") as f:
@@ -178,9 +178,7 @@ class DPCodeManager:
             List of matching DPCode values
         """
         pattern_lower = pattern.lower()
-        return [
-            code for code in self._code_to_name.keys() if pattern_lower in code.lower()
-        ]
+        return [code for code in self._code_to_name.keys() if pattern_lower in code.lower()]
 
     def search_names(self, pattern: str) -> List[str]:
         """
@@ -193,9 +191,7 @@ class DPCodeManager:
             List of matching constant names
         """
         pattern_lower = pattern.lower()
-        return [
-            name for name in self._name_to_code.keys() if pattern_lower in name.lower()
-        ]
+        return [name for name in self._name_to_code.keys() if pattern_lower in name.lower()]
 
     def is_valid_code(self, code: str) -> bool:
         """

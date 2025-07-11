@@ -5,10 +5,10 @@ This module defines the data structures used throughout the authentication syste
 including authentication sessions and device information wrapping.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
-from datetime import datetime
 import json
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -181,6 +181,33 @@ class DeviceInfo:
         """Get the range/options for a specific function."""
         return self.status_range.get(code)
 
+    # Adapter properties for backward compatibility with DPS module field names
+    @property
+    def device_id(self) -> str:
+        """Alias for id field (DPS module compatibility)."""
+        return self.id
+
+    @property
+    def model(self) -> str:
+        """Alias for product_name field (DPS module compatibility)."""
+        return self.product_name
+
+    @property
+    def ip_address(self) -> str:
+        """Alias for ip field (DPS module compatibility)."""
+        return self.ip
+
+    @property
+    def protocol_version(self) -> Optional[str]:
+        """Protocol version for DPS operations (DPS module compatibility)."""
+        # Extract from local_strategy if available, otherwise default to 3.3
+        if self.local_strategy:
+            # Check if protocol version is stored in local_strategy
+            for strategy in self.local_strategy.values():
+                if isinstance(strategy, dict) and "protocol" in strategy:
+                    return str(strategy["protocol"])
+        return "3.3"  # Default protocol version
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert device info to dictionary."""
         return {
@@ -208,6 +235,11 @@ class DeviceInfo:
             "status_range": self.status_range,
             "device_type": self.device_type,
             "can_control_locally": self.can_control_locally,
+            # Include adapter field names for backward compatibility
+            "device_id": self.device_id,
+            "model": self.model,
+            "ip_address": self.ip_address,
+            "protocol_version": self.protocol_version,
         }
 
 

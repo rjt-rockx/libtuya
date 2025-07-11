@@ -134,20 +134,6 @@ mapper.update_mapping(
 mapper.export_mappings("bf1234567890abcdef", Path("device_mappings.json"))
 ```
 
-## Testing
-
-Comprehensive test coverage with mock TinyTuya devices:
-
-```bash
-# Run all DPS tests
-python -m pytest tests/dps/
-
-# Run specific test files
-python -m pytest tests/dps/test_mapping_rules.py
-python -m pytest tests/dps/test_discovery.py
-python -m pytest tests/dps/test_mapper.py
-python -m pytest tests/dps/test_init.py
-```
 
 ## Integration
 

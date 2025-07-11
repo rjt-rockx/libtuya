@@ -1,0 +1,323 @@
+{
+  "description": "Device category to capability mappings from Home Assistant's Tuya integration",
+  "source": "Extracted from all platform files in homeassistant/components/tuya/",
+  "categories": {
+    "lights": {
+      "clkg": {
+        "name": "Curtain Switch",
+        "capabilities": ["switch_backlight"]
+      },
+      "dc": {
+        "name": "String Lights",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "temp_value", "colour_data"]
+      },
+      "dd": {
+        "name": "Strip Lights",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "temp_value", "colour_data"],
+        "notes": "Uses DEFAULT_COLOR_TYPE_DATA_V2"
+      },
+      "dj": {
+        "name": "Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value_v2", "bright_value", "temp_value_v2", "temp_value", "colour_data_v2", "colour_data", "switch_1", "bright_value_1"],
+        "notes": "Also supports switches for RGB lights with plugs"
+      },
+      "dsd": {
+        "name": "Filament Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value"]
+      },
+      "fsd": {
+        "name": "Ceiling Fan Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "temp_value", "colour_data", "light"]
+      },
+      "fwd": {
+        "name": "Ambient Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "temp_value", "colour_data"]
+      },
+      "gyd": {
+        "name": "Motion Sensor Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "temp_value", "colour_data"]
+      },
+      "jsq": {
+        "name": "Humidifier Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "colour_data_hsv"]
+      },
+      "kg": {
+        "name": "Switch",
+        "capabilities": ["switch_backlight"],
+        "notes": "Also mapped to 'cz' and 'pc'"
+      },
+      "kj": {
+        "name": "Air Purifier",
+        "capabilities": ["light"]
+      },
+      "kt": {
+        "name": "Air conditioner",
+        "capabilities": ["light"]
+      },
+      "mbd": {
+        "name": "Unknown light product (VECINO RGBW)",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "colour_data"]
+      },
+      "qjdcz": {
+        "name": "Unknown product with light capabilities",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "colour_data"]
+      },
+      "qn": {
+        "name": "Heater",
+        "capabilities": ["light"]
+      },
+      "sp": {
+        "name": "Smart Camera",
+        "capabilities": ["floodlight_switch", "floodlight_lightness", "basic_indicator"],
+        "notes": "Also mapped to 'dghsxj'"
+      },
+      "sz": {
+        "name": "Smart Gardening system",
+        "capabilities": ["light", "bright_value"]
+      },
+      "tgkg": {
+        "name": "Dimmer Switch",
+        "capabilities": ["switch_led_1", "bright_value_1", "brightness_max_1", "brightness_min_1", "switch_led_2", "bright_value_2", "brightness_max_2", "brightness_min_2", "switch_led_3", "bright_value_3", "brightness_max_3", "brightness_min_3"]
+      },
+      "tgq": {
+        "name": "Dimmer",
+        "capabilities": ["switch_led", "bright_value_v2", "bright_value", "brightness_max_1", "brightness_min_1", "switch_led_1", "bright_value_1", "switch_led_2", "bright_value_2"],
+        "notes": "Also mapped to 'tdq'"
+      },
+      "hxd": {
+        "name": "Wake Up Light II",
+        "capabilities": ["switch_led", "bright_value_v2", "bright_value", "brightness_max_1", "brightness_min_1"]
+      },
+      "tyd": {
+        "name": "Outdoor Flood Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "temp_value", "colour_data"]
+      },
+      "tyndj": {
+        "name": "Solar Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "temp_value", "colour_data"]
+      },
+      "xdd": {
+        "name": "Ceiling Light",
+        "capabilities": ["switch_led", "work_mode", "bright_value", "temp_value", "colour_data", "switch_night_light"]
+      },
+      "ykq": {
+        "name": "Remote Control",
+        "capabilities": ["switch_controller", "work_mode", "bright_controller", "temp_controller"]
+      },
+      "fs": {
+        "name": "Fan",
+        "capabilities": ["light", "work_mode", "bright_value", "temp_value", "switch_led", "bright_value_1"]
+      }
+    },
+    "switches": {
+      "bh": {
+        "name": "Smart Kettle",
+        "capabilities": ["start", "warm"]
+      },
+      "cn": {
+        "name": "EasyBaby",
+        "capabilities": ["disinfection", "water"]
+      },
+      "cs": {
+        "name": "Dehumidifier",
+        "capabilities": ["anion", "child_lock", "filter_reset"]
+      },
+      "cwwsq": {
+        "name": "Smart Pet Feeder",
+        "capabilities": ["slow_feed"]
+      },
+      "cwysj": {
+        "name": "Pet Fountain",
+        "capabilities": ["filter_reset", "pump_reset", "switch", "water_reset", "uv"]
+      },
+      "dj": {
+        "name": "Light (with switch)",
+        "capabilities": ["switch"]
+      },
+      "dlq": {
+        "name": "Circuit Breaker",
+        "capabilities": ["child_lock", "switch"]
+      },
+      "hxd": {
+        "name": "Wake Up Light II",
+        "capabilities": ["switch_1", "switch_2", "switch_3", "switch_4", "switch_5", "switch_6"]
+      },
+      "wkcz": {
+        "name": "Two-way temperature and humidity switch",
+        "capabilities": ["switch_1", "switch_2"]
+      },
+      "kg": {
+        "name": "Switch",
+        "capabilities": ["child_lock", "switch_1", "switch_2", "switch_3", "switch_4", "switch_5", "switch_6", "switch_7", "switch_8", "switch_usb1", "switch_usb2", "switch_usb3", "switch_usb4", "switch_usb5", "switch_usb6", "switch"]
+      },
+      "kj": {
+        "name": "Air Purifier",
+        "capabilities": ["anion", "filter_reset", "lock", "switch", "wet", "uv"]
+      },
+      "kt": {
+        "name": "Air conditioner",
+        "capabilities": ["anion", "lock"]
+      },
+      "mzj": {
+        "name": "Sous Vide Cooker",
+        "capabilities": ["switch", "start"]
+      },
+      "pc": {
+        "name": "Power Socket",
+        "capabilities": ["child_lock", "switch_1", "switch_2", "switch_3", "switch_4", "switch_5", "switch_6", "switch_usb1", "switch_usb2", "switch_usb3", "switch_usb4", "switch_usb5", "switch_usb6", "switch"]
+      },
+      "qjdcz": {
+        "name": "Unknown product with switch capabilities",
+        "capabilities": ["switch_1"]
+      },
+      "qn": {
+        "name": "Heater",
+        "capabilities": ["anion", "lock"]
+      },
+      "sd": {
+        "name": "Robot Vacuum",
+        "capabilities": ["switch_disturb", "voice_switch"]
+      },
+      "sfkzq": {
+        "name": "Smart Water Timer",
+        "capabilities": ["switch"]
+      },
+      "ggq": {
+        "name": "Irrigator",
+        "capabilities": ["switch_1", "switch_2", "switch_3", "switch_4", "switch_5", "switch_6", "switch_7", "switch_8"]
+      },
+      "sgbj": {
+        "name": "Siren Alarm",
+        "capabilities": ["muffling"]
+      },
+      "sp": {
+        "name": "Smart Camera",
+        "capabilities": ["wireless_batterylock", "cry_detection_switch", "decibel_switch", "record_switch", "motion_record", "basic_private", "basic_flip", "basic_osd", "basic_wdr", "motion_tracking", "motion_switch"]
+      },
+      "sz": {
+        "name": "Smart Gardening system",
+        "capabilities": ["switch", "pump"]
+      },
+      "szjqr": {
+        "name": "Fingerbot",
+        "capabilities": ["switch"]
+      },
+      "znjxs": {
+        "name": "Hejhome whitelabel Fingerbot",
+        "capabilities": ["switch"]
+      },
+      "tdq": {
+        "name": "IoT Switch",
+        "capabilities": ["switch_1", "switch_2", "switch_3", "switch_4", "child_lock"]
+      },
+      "tyndj": {
+        "name": "Solar Light",
+        "capabilities": ["switch_save_energy"]
+      },
+      "wk": {
+        "name": "Thermostat",
+        "capabilities": ["child_lock"]
+      },
+      "wkf": {
+        "name": "Thermostatic Radiator Valve",
+        "capabilities": ["child_lock", "window_check"]
+      },
+      "wnykq": {
+        "name": "Air Conditioner Mate",
+        "capabilities": ["switch"]
+      },
+      "wsdcg": {
+        "name": "SIREN",
+        "capabilities": ["switch"]
+      },
+      "qxj": {
+        "name": "SIREN with External Probe",
+        "capabilities": ["switch"]
+      },
+      "xdd": {
+        "name": "Ceiling Light",
+        "capabilities": ["do_not_disturb"]
+      },
+      "xxj": {
+        "name": "Diffuser",
+        "capabilities": ["switch", "switch_spray", "switch_voice"]
+      },
+      "zndb": {
+        "name": "Smart Electricity Meter",
+        "capabilities": ["switch"]
+      },
+      "fs": {
+        "name": "Fan",
+        "capabilities": ["anion", "humidifier", "oxygen", "fan_cool", "fan_beep", "child_lock"]
+      },
+      "cl": {
+        "name": "Curtain",
+        "capabilities": ["control_back", "opposite"]
+      },
+      "jsq": {
+        "name": "Humidifier",
+        "capabilities": ["switch_sound", "sleep", "sterilization"]
+      },
+      "znrb": {
+        "name": "Pool HeatPump",
+        "capabilities": ["switch"]
+      },
+      "dr": {
+        "name": "Electric Blanket",
+        "capabilities": ["switch", "switch_1", "switch_2", "preheat", "preheat_1", "preheat_2"]
+      },
+      "pir": {
+        "name": "PIR Sensor",
+        "capabilities": ["pir", "battery_percentage"]
+      },
+      "cjkg": {
+        "name": "Scene Controller",
+        "capabilities": ["switch", "scene"]
+      }
+    },
+    "climate": {
+      "kt": {
+        "name": "Air conditioner",
+        "switch_only_hvac_mode": "cool"
+      },
+      "qn": {
+        "name": "Heater",
+        "switch_only_hvac_mode": "heat"
+      },
+      "rs": {
+        "name": "Heater",
+        "switch_only_hvac_mode": "heat"
+      },
+      "wk": {
+        "name": "Thermostat",
+        "switch_only_hvac_mode": "heat_cool"
+      },
+      "wkf": {
+        "name": "Thermostatic Radiator Valve",
+        "switch_only_hvac_mode": "heat"
+      },
+      "dbl": {
+        "name": "Electric Fireplace",
+        "switch_only_hvac_mode": "heat"
+      }
+    }
+  },
+  "common_dps_mappings": {
+    "1": "switch",
+    "2": "mode",
+    "3": "brightness",
+    "4": "color_temperature",
+    "5": "color",
+    "20": "switch",
+    "21": "mode",
+    "22": "brightness",
+    "23": "color_temperature",
+    "24": "color"
+  },
+  "duplicate_mappings": {
+    "cz": "kg",
+    "pc": "kg",
+    "dghsxj": "sp",
+    "tdq": "tgq"
+  }
+}
