@@ -1,29 +1,41 @@
 # How libtuya compares
 
-Facts below were checked against the upstream repositories in November 2026.
+Facts about the other projects were checked against their repositories on
+16 November 2026. libtuya 2.0 itself has been tested against a simulated
+device, a stubbed cloud and Home Assistant's device dumps, and not yet against
+a live account or physical devices.
 
 ## The projects libtuya builds on or sits next to
 
 | | [Home Assistant `tuya`][ha] | [localtuya] | [hass-localtuya] | [tuya-local] | [TinyTuya] | libtuya |
 |---|---|---|---|---|---|---|
 | Runs without Home Assistant | no | no | no | no | yes | yes |
-| Works without a Tuya developer account | yes (QR login) | keys typed in by hand | keys typed in by hand | yes (QR login) | keys supplied by hand | yes (QR login) |
+| Works without a Tuya developer account | yes (QR login) | keys typed in by hand | keys typed in by hand | yes (QR login with Home Assistant's client id) | keys supplied by hand | yes (QR login with Home Assistant's client id) |
 | Local keys come from | not used | developer API or manual | developer API or manual | QR login or manual | wizard using the developer API | QR login |
-| What gives datapoints meaning | cloud codes per category, plus product fixes | you configure each entity | category templates plus the developer API's dp map | a database of 1,790 device files, matched by product | nothing; raw datapoints (helpers for bulbs and covers) | Home Assistant's category tables and product fixes, mapped to dp ids by the cloud's own map |
-| Control path | cloud | LAN | LAN | LAN | LAN | LAN, cloud fallback |
+| What gives datapoints meaning | cloud codes per category, plus product fixes | you configure each entity | category tables plus the developer API's dp map, else by hand | a database of 1,790 device files, matched by product id or datapoints | raw datapoints; classes for bulbs, covers and 15 contributed device types | Home Assistant's category tables and product fixes, mapped to dp ids by the cloud's own map |
+| Control path | cloud | LAN | LAN | LAN | LAN, or cloud via the developer API | LAN, cloud fallback |
+| Uses the cloud once set up | always | no | no | no | no | optionally: fallback, writes with no local form, scenes, push |
 | LAN protocol | none | own, asyncio, 3.1 to 3.4 | own, asyncio, 3.1 to 3.5 | TinyTuya | own, blocking, 3.1 to 3.5 | TinyTuya |
 | Sub-devices behind a gateway | through the cloud | no | yes | yes, you pick the hub | yes | yes, gateway found by shared key |
-| Live updates | cloud push | LAN push | LAN push | LAN push | LAN (`receive`, `Monitor`) | LAN (`watch`) |
+| Live updates | cloud push | LAN push | LAN push | LAN push | LAN (`receive`, `Monitor`) | LAN (`watch`), cloud push (`subscribe`) |
+| Tested on real hardware | yes | yes | yes | yes | yes | not yet |
 | Licence | Apache-2.0 | GPL-3.0 | GPL-3.0 | MIT | MIT | MIT, with Apache-2.0 data |
+
+localtuya and hass-localtuya are alternatives to each other: the second is a
+fork of the first, they install under the same name, and localtuya has had one
+commit in the twelve months to November 2026.
 
 ## What libtuya adds
 
-The combination in the last column did not exist as a Python library: no Home
-Assistant, no developer account, local control, and devices that mean
-something without per-device configuration.
+As far as we could find, no single Python library had the combination in the
+last column: no Home Assistant, no developer account, local control, and
+devices that mean something without per-device configuration. The nearest is
+three separate packages by one author (tuyawizard, tuya-interpreter and
+rustuya, below).
 
-- TinyTuya has the protocol but hands you datapoint 22; libtuya hands you
-  `brightness`.
+- TinyTuya has the protocol but, outside its bulb, cover and contributed
+  device classes, hands you numbered datapoints; libtuya hands you named
+  entities.
 - Home Assistant has the meaning but sends every command through the cloud;
   libtuya sends it over the LAN.
 - tuya-local has both, inside Home Assistant.
@@ -32,29 +44,46 @@ Concretely, compared with using the pieces yourself:
 
 - **The datapoint map is taken from the cloud** rather than guessed or
   configured, including for devices where the SDK throws it away.
-- **Writes are translated back to raw datapoints**, which none of the upstream
-  libraries do (the cloud normally does it server-side).
+- **Writes are translated back to raw datapoints** where an exact inverse
+  exists (plain values and two colour encodings), which none of the upstream
+  libraries do; the cloud normally does it server-side. Other writes go
+  through the cloud.
 - **The entities are Home Assistant's.** A test checks that for every device
   fixture in the vendored Home Assistant release (329 real devices), libtuya
-  builds exactly the entities in Home Assistant's own test snapshots.
+  derives the same entities, by unique id, as Home Assistant's own test
+  snapshots. The few with nothing to read or write are then left out.
+- **Both paths in one place.** Devices that never answer on the LAN
+  (battery-powered, Bluetooth-only) are still controlled, through the cloud.
+  The LAN-only integrations cannot reach them.
 
 ## Where the others are stronger
 
+- **They are proven on real hardware.** libtuya 2.0 has so far only met a
+  simulated device and recorded device data.
+- **Home Assistant is always current.** libtuya's device knowledge is a
+  snapshot of one Home Assistant release and gains new devices only when it
+  is re-synced. Home Assistant also loads product fixes of your own from its
+  configuration directory; libtuya uses only those shipped with the handlers.
 - **tuya-local knows more odd devices.** Its database covers products whose
   cloud description is empty or wrong. libtuya only knows what the cloud and
-  Home Assistant's tables know; a device with no published datapoints gets no
-  entities here.
+  Home Assistant's tables and product fixes know; a device with no published
+  datapoints and no fix gets no entities here. (tuya-local, in turn, only
+  accepts a device that matches one of its files.)
 - **The Home Assistant integrations are services, libtuya is a library.** They
-  keep connections alive, reconnect, back off and track availability.
-  libtuya connects per call; `watch()` is a plain loop.
-- **localtuya's protocol code matches replies to requests.** TinyTuya does
+  keep connections alive, reconnect and track availability, and TinyTuya's
+  experimental `Monitor` does the same for a standalone program. libtuya
+  connects per call; `watch()` is a plain loop.
+- **localtuya and hass-localtuya match replies to requests.** TinyTuya does
   not, so libtuya serialises calls and treats every reply as a partial update.
 - **Home Assistant's entity classes have more behaviour.** libtuya composes
-  commands for lights; for climate, fans, covers and vacuums it exposes the
-  individual attributes (`hvac_mode`, `set_temperature`, `instruction`,
-  `set_position`, ...) and leaves combining them to you.
-- **Cloud push, scenes, camera streams and infrared remotes** are in Home
-  Assistant and not here.
+  commands for lights; for climate, fans and covers it exposes the individual
+  attributes (`hvac_mode`, `set_temperature`, `instruction`, `set_position`,
+  ...) and leaves combining them to you.
+- **Infrared and RF remotes** work in tuya-local, hass-localtuya and TinyTuya,
+  and not here (nor in Home Assistant's `tuya`).
+- **The login is borrowed.** The QR login uses the client id Tuya issued to
+  Home Assistant, as tuya-local's does. Tuya has not said whether other
+  software may use it; see [login.md](login.md).
 - **TinyTuya supports Python 3.10+**; libtuya needs 3.13 because
   tuya-device-handlers does.
 
@@ -62,13 +91,21 @@ Concretely, compared with using the pieces yourself:
 
 Not used by libtuya; listed so you can pick the right tool.
 
+- [tuyawizard](https://github.com/3735943886/tuyawizard),
+  [tuya-interpreter](https://github.com/3735943886/tuya-interpreter) and
+  [rustuya](https://github.com/3735943886/rustuya) (MIT, one author): QR
+  login to a device list with keys; a Rust engine with a Python wrapper that
+  turns such a device entry and raw datapoints into named properties and
+  back, using its own rule packs; and a LAN library. Together they cover the
+  same ground as libtuya, as three packages you join yourself.
+  tuya-interpreter was first published in October 2026.
 - [tuya-local-key](https://github.com/vineetchoudhary/tuya-local-key)
   (Apache-2.0): a web UI and CLI that does the QR login and shows keys,
   addresses and live values. An application rather than a library.
-- [tuyawizard](https://github.com/3735943886/tuyawizard) (MIT): QR login to a
-  device list with keys, from the author of the `rustuya` LAN library.
 - [open-tuya](https://github.com/cheziyi/open-tuya) (MIT, TypeScript): the
-  same overall design for Node, using tuya-local's device database.
+  same overall design for Node, using tuya-local's device database. First
+  published in October 2026; its README says it has barely been tested
+  against real devices.
 
 [ha]: https://github.com/home-assistant/core/tree/dev/homeassistant/components/tuya
 [localtuya]: https://github.com/rospogrigio/localtuya

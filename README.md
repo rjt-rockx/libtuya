@@ -137,8 +137,9 @@ connections) and `libtuya.dpmap` (LAN datapoints to and from cloud codes).
 |---|---|---|---|---|
 | Home Assistant `tuya` | yes | no | cloud | per-category tables + product fixes |
 | localtuya | yes | for automatic keys | local | configured by hand |
+| hass-localtuya | yes | for automatic keys and setup | local | category tables + the developer API's dp map |
 | tuya-local | yes | no | local | database of 1,790 device files |
-| TinyTuya | no | for its key wizard | local | none; raw datapoints |
+| TinyTuya | no | for its key wizard | local | raw datapoints; classes for some device types |
 | **libtuya** | no | no | local, cloud fallback | Home Assistant's tables + product fixes |
 
 More in [docs/comparison.md](docs/comparison.md), including where the others
