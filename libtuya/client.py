@@ -64,20 +64,25 @@ class Tuya:
         *,
         timeout: float = 180.0,
         interval: float = 2.0,
+        client_id: str = cloud_api.CLIENT_ID,
+        schema: str = cloud_api.SCHEMA,
     ) -> None:
         """Log in by scanning a QR code with the Smart Life or Tuya Smart app.
 
         `user_code` is shown in the app under Me > gear icon > Account and
         Security > User Code. `show_qr` receives the text to display as a QR
         code; this call then waits until it has been scanned and approved.
+
+        `client_id` and `schema` identify the application to Tuya; the
+        defaults are Home Assistant's (see docs/login.md).
         """
-        token = cloud_api.request_qr(user_code)
-        show_qr(cloud_api.QR_PREFIX + token)
+        attempt = cloud_api.QrLogin(user_code, client_id, schema)
+        show_qr(attempt.text)
         deadline = time.monotonic() + timeout
         waiting = "no answer"
         while time.monotonic() < deadline:
             try:
-                session, waiting = cloud_api.poll_login(user_code, token)
+                session, waiting = attempt.poll()
             except CloudError as err:  # a network blip should not end the wait
                 session, waiting = None, str(err)
             if session:
@@ -92,8 +97,12 @@ class Tuya:
         if self.logged_in:
             try:
                 self.cloud.logout()
-            except CloudError as err:
-                _LOGGER.warning("The login was removed here but not revoked at Tuya: %s", err)
+            except TuyaError as err:
+                _LOGGER.warning(
+                    "The login was removed here but not revoked at Tuya (%s); it can be "
+                    "removed in the app under Me > gear icon > Account and Security",
+                    err,
+                )
         for name in ("session.json", "devices.json"):
             (self.home / name).unlink(missing_ok=True)
         self._cloud = self._devices = None
@@ -198,7 +207,7 @@ class Tuya:
 
     def scenes(self) -> list[Scene]:
         """The tap-to-run scenes defined in the app, fetched from the cloud."""
-        return self.cloud.scenes(self._homes())
+        return self._ask_cloud(lambda cloud: cloud.scenes(self._homes()))
 
     def run_scene(self, scene: Scene | str) -> None:
         """Run a scene, given as a `Scene` or by its name or id."""
@@ -207,7 +216,7 @@ class Tuya:
             if len(matches) != 1:
                 raise TuyaError(f"{len(matches)} scenes are called {scene!r}")
             scene = matches[0]
-        self.cloud.run_scene(scene)
+        self._ask_cloud(lambda cloud: cloud.run_scene(scene))
 
     def subscribe(self, callback: Callable[[Device, dict[str, Any]], None]) -> Callable[[], None]:
         """Follow every device through the cloud's push channel.
@@ -243,7 +252,8 @@ class Tuya:
                 _LOGGER.exception("Error while handling a pushed message")
 
         subscribed = [(d.id, bool(d.record.get("support_local"))) for d in devices.values()]
-        return self.cloud.listen(subscribed, self._homes(), on_message)
+        homes = self._homes()
+        return self._ask_cloud(lambda cloud: cloud.listen(subscribed, homes, on_message))
 
     # -- for Device ---------------------------------------------------------
 
@@ -263,23 +273,38 @@ class Tuya:
     def _cloud_send(
         self, device: Device, commands: list[dict[str, Any]], reason: TuyaError
     ) -> None:
-        self._fall_back(device, reason).send(device.id, commands)
+        self._fall_back(device, reason, lambda cloud: cloud.send(device.id, commands))
 
     def _cloud_refresh(self, device: Device, reason: TuyaError) -> None:
-        fresh = self._fall_back(device, reason).status(device.id)
+        fresh = self._fall_back(device, reason, lambda cloud: cloud.status(device.id))
         if fresh is None:
             raise CloudError(f"the cloud no longer lists {device.name}")
         device._merge_cloud(fresh)
 
-    def _fall_back(self, device: Device, reason: TuyaError) -> cloud_api.Cloud:
-        """The cloud, to do what the LAN could not; `reason` is raised if it may not be used."""
+    def _fall_back(self, device: Device, reason: TuyaError, call: Callable[..., Any]) -> Any:
+        """Do through the cloud what the LAN could not; `reason` is raised if that is not on."""
         if not self.cloud_fallback:
             raise reason
         _LOGGER.info("%s: %s; using the cloud", device.name, reason)
         try:
-            return self.cloud
+            return self._ask_cloud(call)
         except NotLoggedIn:
+            if self.logged_in:  # the login has gone stale, which is the news
+                raise
             raise reason from None
+
+    def _ask_cloud(self, call: Callable[[cloud_api.Cloud], Any]) -> Any:
+        """Run a cloud call, reading the saved login again if it has gone stale.
+
+        Refresh tokens are single-use: when another process sharing this home
+        directory has renewed the login, this one's copy stops working.
+        """
+        try:
+            return call(self.cloud)
+        except NotLoggedIn:
+            with self._lock:
+                self._cloud = None
+            return call(self.cloud)
 
     # -- storage ----------------------------------------------------------
 
@@ -303,18 +328,16 @@ class Tuya:
         """Replace the device list with the cloud's, keeping known LAN addresses."""
         with self._lock:
             known = {device.id: device.address for device in self._known()}
-            cloud = self.cloud
-            self._devices = [
-                Device(self, record, known.get(record["id"])) for record in cloud.devices()
-            ]
-            self._home_ids = cloud.home_ids()
+            records = self._ask_cloud(lambda cloud: cloud.devices())
+            self._devices = [Device(self, record, known.get(record["id"])) for record in records]
+            self._home_ids = self._ask_cloud(lambda cloud: cloud.home_ids())
             return self._devices
 
     def _homes(self) -> list[str]:
         with self._lock:
             self._known()
             if not self._home_ids:
-                self._home_ids = self.cloud.home_ids()
+                self._home_ids = self._ask_cloud(lambda cloud: cloud.home_ids())
                 self._save()
             return self._home_ids
 

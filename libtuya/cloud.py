@@ -30,11 +30,12 @@ from tuya_sharing import (
 from tuya_sharing.exceptions import ApiRequestException, TuyaSDKException
 from tuya_sharing.mq import SharingMQ
 
-from .errors import CloudError
+from .errors import CloudError, NotLoggedIn
 
 # The sharing API only accepts clients registered with Tuya. This is the one
 # Tuya published for Home Assistant; the app's consent screen names it
-# accordingly. There is no client secret.
+# accordingly. There is no client secret. `Tuya.login` takes another pair,
+# should Tuya ever change it.
 CLIENT_ID = "HA_3y9q4ak7g4ephrvke"
 SCHEMA = "haauthorize"
 QR_PREFIX = "tuyaSmart--qrLogin?token="
@@ -60,15 +61,19 @@ class Scene:
     enabled: bool = True
 
 
+# Error codes with which the cloud turns down a login that has expired or
+# been replaced, besides the "sign invalid" message.
+_STALE_LOGIN = {"1010", "1011", "1012"}
+
+
 @contextmanager
 def _errors(action: str) -> Iterator[None]:
     try:
         yield
     except ApiRequestException as err:
         message = f"{action}: {err.error_message} ({err.error_code})"
-        if "sign invalid" in str(err.error_message):
-            # How a login that has expired, or been replaced by a newer one, shows up.
-            message += "; the saved login is no longer valid, log in again"
+        if "sign invalid" in str(err.error_message) or str(err.error_code) in _STALE_LOGIN:
+            raise NotLoggedIn(f"{message}; the saved login is no longer valid") from err
         raise CloudError(message) from err
     except requests.RequestException as err:
         # Not the exception's own text: it quotes the URL, user code included.
@@ -80,36 +85,44 @@ def _errors(action: str) -> Iterator[None]:
         raise CloudError(f"{action}: unexpected response from the Tuya cloud") from err
 
 
-def request_qr(user_code: str) -> str:
-    """Start a login; returns a token. Show ``QR_PREFIX + token`` as a QR code."""
-    with _errors("login"):
-        response = LoginControl().qr_code(CLIENT_ID, SCHEMA, user_code)
-        if not response.get("success"):
-            raise CloudError(
-                f"login refused: {response.get('msg', 'unknown error')} "
-                f"(code {response.get('code')}); check the user code"
-            )
-        return response["result"]["qrcode"]
+class QrLogin:
+    """One attempt to log in by QR code.
 
-
-def poll_login(user_code: str, token: str) -> tuple[Session | None, str]:
-    """The session, once the QR code has been scanned and approved.
-
-    Until then the session is None and the second item is what the cloud said.
+    `text` is what to show as a QR code; `poll()` then tells whether it has
+    been scanned and approved in the app.
     """
-    with _errors("login"):
-        authorised, info = LoginControl().login_result(token, CLIENT_ID, user_code)
-        if not authorised:
-            return None, f"{info.get('msg', 'no reason given')} (code {info.get('code')})"
-        token_keys = ("t", "uid", "expire_time", "access_token", "refresh_token")
-        session = {
-            "user_code": user_code,
-            "terminal_id": info["terminal_id"],
-            "endpoint": info["endpoint"],
-            # Kept exactly as sent: the SDK derives the expiry from `t` and `expire_time`.
-            "token_info": {key: info[key] for key in token_keys},
-        }
-        return session, "approved"
+
+    def __init__(self, user_code: str, client_id: str = CLIENT_ID, schema: str = SCHEMA) -> None:
+        self._control = LoginControl()
+        self._user_code, self._client_id = user_code, client_id
+        with _errors("login"):
+            response = self._control.qr_code(client_id, schema, user_code)
+            if not response.get("success"):
+                raise CloudError(
+                    f"login refused: {response.get('msg', 'unknown error')} "
+                    f"(code {response.get('code')}); check the user code"
+                )
+            self._token = response["result"]["qrcode"]
+        self.text = QR_PREFIX + self._token
+
+    def poll(self) -> tuple[Session | None, str]:
+        """The session once approved; until then None and what the cloud answered."""
+        with _errors("login"):
+            authorised, info = self._control.login_result(
+                self._token, self._client_id, self._user_code
+            )
+            if not authorised:
+                return None, f"{info.get('msg', 'no reason given')} (code {info.get('code')})"
+            token_keys = ("t", "uid", "expire_time", "access_token", "refresh_token")
+            session = {
+                "client_id": self._client_id,  # the tokens are only good with it
+                "user_code": self._user_code,
+                "terminal_id": info["terminal_id"],
+                "endpoint": info["endpoint"],
+                # Kept exactly as sent: the SDK derives the expiry from `t` and `expire_time`.
+                "token_info": {key: info[key] for key in token_keys},
+            }
+            return session, "approved"
 
 
 class _TokenListener(SharingTokenListener):
@@ -149,7 +162,7 @@ class Cloud:
 
     def __init__(self, session: Session, save: Callable[[Session], None]) -> None:
         self._manager = Manager(
-            CLIENT_ID,
+            session.get("client_id", CLIENT_ID),
             session["user_code"],
             session["terminal_id"],
             session["endpoint"],

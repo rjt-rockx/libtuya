@@ -237,7 +237,7 @@ class Device:
 
         `kind` is rtsp, hls, flv or rtmp.
         """
-        return self._client.cloud.stream_url(self.id, kind)
+        return self._client._ask_cloud(lambda cloud: cloud.stream_url(self.id, kind))
 
     def _require_map(self) -> None:
         if not self.dp_map:

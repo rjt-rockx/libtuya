@@ -179,7 +179,7 @@ def test_login_stores_the_session_as_the_cloud_gave_it(tuya: Tuya, monkeypatch):
     # `t` and `expire_time` must reach the SDK untouched: it derives the
     # expiry from them, and a converted value stops tokens being refreshed.
     saved = json.loads((tuya.home / "session.json").read_text())
-    assert saved == SESSION | {"token_info": NEW_TOKEN}
+    assert saved == SESSION | {"token_info": NEW_TOKEN, "client_id": cloud_module.CLIENT_ID}
 
     monkeypatch.setattr(
         FakeLoginControl, "login_result", lambda *args: (False, {"msg": "expired", "code": 9})
@@ -285,3 +285,19 @@ def test_cloud_push_reaches_subscribers(logged_in: Tuya):
     assert (plug.status["switch_1"], plug.online) == (True, False)
     stop()
     assert not queue.running
+
+
+def test_a_login_renewed_by_another_process_is_picked_up(logged_in: Tuya, monkeypatch):
+    """Refresh tokens are single-use, so two processes sharing a home can leave one stale."""
+    _, plug = logged_in.devices()
+
+    def refuse(*args):
+        raise ApiRequestException(error_code=-9999999, error_message="sign invalid")
+
+    logged_in.cloud._manager.customer_api.post = refuse  # this process's login has gone stale
+    plug.turn_off()  # ... so the saved session is read again, and that one works
+    assert logged_in.cloud._manager.customer_api.posted
+
+    monkeypatch.setattr(FakeApi, "post", refuse)  # nothing newer was saved
+    with pytest.raises(NotLoggedIn, match="no longer valid"):
+        plug.turn_on()
