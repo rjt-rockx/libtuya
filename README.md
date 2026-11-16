@@ -7,7 +7,7 @@ A Python library that provides seamless Tuya device control by combining the aut
 ### Installation
 
 ```bash
-git clone https://github.com/rjt-herschel/libtuya.git
+git clone https://github.com/rjt-rockx/libtuya.git
 cd libtuya
 pip install -e .
 ```
@@ -114,7 +114,7 @@ tuya info DEVICE --json               # Output as JSON
 ### Setup Development Environment
 
 ```bash
-git clone https://github.com/rjt-herschel/libtuya.git
+git clone https://github.com/rjt-rockx/libtuya.git
 cd libtuya
 pip install -e ".[dev]"
 ```
