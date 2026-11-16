@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from . import cloud as cloud_api
+from .cloud import Scene
 from .device import Device
 from .errors import CloudError, DeviceNotFound, LanError, NotLoggedIn, TuyaError
 from .lan import LanAddress, discover, probe_version
@@ -23,19 +25,31 @@ class Tuya:
 
     State lives in `home` (default ``~/.libtuya``, or ``$LIBTUYA_HOME``):
     ``session.json`` holds the login and ``devices.json`` the device list with
-    local keys, datapoint maps and LAN addresses. After the first
-    `devices(refresh=True)` the cloud is only contacted when a device cannot
-    be reached on the LAN, and not at all with ``cloud_fallback=False``.
+    local keys, datapoint maps and LAN addresses. Once the device list has
+    been fetched, the cloud is only contacted when a device cannot be reached
+    on the LAN (never, with ``cloud_fallback=False``), for scenes, and while
+    `subscribe` is active.
+
+    `timeout` is how long to wait for a device on the LAN, in seconds.
 
     The API is synchronous and blocking; from asyncio, call it through
-    ``asyncio.to_thread``.
+    ``asyncio.to_thread``. One `Tuya` can be shared between threads.
     """
 
-    def __init__(self, home: str | Path | None = None, *, cloud_fallback: bool = True) -> None:
+    def __init__(
+        self,
+        home: str | Path | None = None,
+        *,
+        cloud_fallback: bool = True,
+        timeout: float = 5.0,
+    ) -> None:
         self.home = Path(home or os.environ.get("LIBTUYA_HOME") or Path.home() / ".libtuya")
         self.cloud_fallback = cloud_fallback
+        self.timeout = timeout
         self._cloud: cloud_api.Cloud | None = None
         self._devices: list[Device] | None = None
+        self._home_ids: list[str] = []
+        self._lock = threading.RLock()  # guards the device list and the files
 
     # -- account ----------------------------------------------------------
 
@@ -53,20 +67,25 @@ class Tuya:
     ) -> None:
         """Log in by scanning a QR code with the Smart Life or Tuya Smart app.
 
-        `user_code` is shown in the app under Me > Settings > Account and
+        `user_code` is shown in the app under Me > gear icon > Account and
         Security > User Code. `show_qr` receives the text to display as a QR
         code; this call then waits until it has been scanned and approved.
         """
         token = cloud_api.request_qr(user_code)
         show_qr(cloud_api.QR_PREFIX + token)
         deadline = time.monotonic() + timeout
+        waiting = "no answer"
         while time.monotonic() < deadline:
-            if session := cloud_api.poll_login(user_code, token):
+            try:
+                session, waiting = cloud_api.poll_login(user_code, token)
+            except CloudError as err:  # a network blip should not end the wait
+                session, waiting = None, str(err)
+            if session:
                 self._write("session.json", session)
                 self._cloud = None
                 return
             time.sleep(interval)
-        raise CloudError("the QR code was not scanned in time")
+        raise CloudError(f"the QR code was not scanned and approved in time ({waiting})")
 
     def logout(self) -> None:
         """Revoke the login and delete the saved session and device list."""
@@ -74,21 +93,24 @@ class Tuya:
             try:
                 self.cloud.logout()
             except CloudError as err:
-                _LOGGER.debug("Could not revoke the session: %s", err)
+                _LOGGER.warning("The login was removed here but not revoked at Tuya: %s", err)
         for name in ("session.json", "devices.json"):
             (self.home / name).unlink(missing_ok=True)
         self._cloud = self._devices = None
+        self._home_ids = []
 
     @property
     def cloud(self) -> cloud_api.Cloud:
-        if self._cloud is None:
-            session = self._read("session.json")
-            if "token_info" not in session:
-                raise NotLoggedIn("not logged in; run `tuya login`")
-            self._cloud = cloud_api.Cloud(
-                session, lambda updated: self._write("session.json", updated)
-            )
-        return self._cloud
+        """The account's cloud connection; raises NotLoggedIn without a saved login."""
+        with self._lock:
+            if self._cloud is None:
+                session = self._read("session.json")
+                if "token_info" not in session:
+                    raise NotLoggedIn("not logged in; run `tuya login`")
+                self._cloud = cloud_api.Cloud(
+                    session, lambda updated: self._write("session.json", updated)
+                )
+            return self._cloud
 
     # -- devices ----------------------------------------------------------
 
@@ -96,25 +118,24 @@ class Tuya:
         """The account's devices.
 
         Served from the saved list unless `refresh` is set or there is none
-        yet; a refresh asks the cloud and then looks for the devices on the LAN.
+        yet. A refresh asks the cloud, looks for the devices on the LAN (which
+        takes `scan_timeout` seconds unless every device answers sooner) and
+        returns new `Device` objects.
         """
-        if refresh or (self._devices is None and not (self.home / "devices.json").exists()):
-            known = {device.id: device.address for device in self._devices or self._load()}
-            self._devices = [
-                Device(self, record, known.get(record["id"])) for record in self.cloud.devices()
-            ]
-            try:
-                self.scan(scan_timeout)
-            except LanError as err:
-                _LOGGER.warning("%s", err)
-                self._save()
-        elif self._devices is None:
-            self._devices = self._load()
-        return self._devices
+        with self._lock:
+            if refresh or not self._known():
+                self._fetch()
+                try:
+                    self.scan(scan_timeout)
+                except LanError as err:
+                    _LOGGER.warning("%s", err)
+                    self._save()
+            return self._known()
 
-    def device(self, ref: str) -> Device:
+    def device(self, ref: str | int) -> Device:
         """Find a device by id, name, position in `devices()` (from 1) or part of its name."""
         devices = self.devices()
+        ref = str(ref)
         lowered = ref.lower()
         exact = [d for d in devices if d.id == ref or d.name.lower() == lowered]
         if not exact and ref.isdigit() and 1 <= int(ref) <= len(devices):
@@ -127,72 +148,131 @@ class Tuya:
         raise DeviceNotFound(f"{ref!r} matches several devices: {', '.join(d.name for d in found)}")
 
     def scan(self, timeout: float = 8.0) -> dict[str, LanAddress]:
-        """Find the devices on the LAN and remember their addresses."""
-        devices = self.devices()
-        found = discover({d.id: d.info.local_key for d in devices if d.info.local_key}, timeout)
-        for device in devices:
-            # A device that stayed silent keeps its last known address.
-            if device.id in found and found[device.id] != device.address:
-                device.moved(found[device.id])
-        self._save()
+        """Find the devices on the LAN and remember their addresses.
+
+        Returns the addresses heard this time. A device that stayed silent
+        keeps the address it had.
+        """
+        with self._lock:
+            devices = self._known() or self._fetch()
+        found = discover({device.id: device.local_key for device in devices}, timeout)
+        with self._lock:
+            for device in devices:
+                if device.id in found and found[device.id] != device.address:
+                    device._moved(found[device.id])
+            self._save()
         return found
 
     def locate(self, device: Device, ip: str, version: str | None = None) -> LanAddress:
         """Set a device's LAN address by hand, for networks where discovery fails.
 
-        Without `version` the protocol versions are tried in turn.
+        The device is contacted to confirm the address: with the protocol
+        `version` given (e.g. "3.4"), else trying each version in turn.
+        Raises LanError if it does not answer.
         """
-        address = (
-            LanAddress(ip, version)
-            if version
-            else probe_version(device.id, device.info.local_key, ip)
-        )
-        device.moved(address)
+        address = probe_version(device.id, device.local_key, ip, version, self.timeout)
+        device._moved(address)
         self._save()
         return address
-
-    # -- used by Device ---------------------------------------------------
 
     def gateway_of(self, device: Device) -> Device | None:
         """The gateway a sub-device (Zigbee, Bluetooth) is reached through, if it is one.
 
         The cloud does not link the two, and its `sub` flag is also set on
-        gateways. What does tell them apart: a sub-device uses its gateway's
-        local key and, unlike the gateway, never shows up on the LAN itself.
+        gateways. What does tell them apart: a sub-device never shows up on
+        the LAN itself, and its local key is the one its gateway answers to.
+        The gateway's own record has that same key, or none at all.
         """
-        if device.address or not device.info.local_key:
+        if device.address or not device.local_key:
             return None
-        gateways = [
-            other
-            for other in self.devices()
-            if other.address and other.info.local_key == device.info.local_key
-        ]
-        return gateways[0] if len(gateways) == 1 else None
+        on_lan = [other for other in self.devices() if other.address]
+        for gateways in (
+            [other for other in on_lan if other.local_key == device.local_key],
+            [other for other in on_lan if not other.local_key],
+        ):
+            if gateways:
+                return gateways[0] if len(gateways) == 1 else None
+        return None
 
-    def relocate(self, device: Device) -> bool:
+    # -- cloud features -----------------------------------------------------
+
+    def scenes(self) -> list[Scene]:
+        """The tap-to-run scenes defined in the app, fetched from the cloud."""
+        return self.cloud.scenes(self._homes())
+
+    def run_scene(self, scene: Scene | str) -> None:
+        """Run a scene, given as a `Scene` or by its name or id."""
+        if not isinstance(scene, Scene):
+            matches = [s for s in self.scenes() if scene in (s.id, s.name)]
+            if len(matches) != 1:
+                raise TuyaError(f"{len(matches)} scenes are called {scene!r}")
+            scene = matches[0]
+        self.cloud.run_scene(scene)
+
+    def subscribe(self, callback: Callable[[Device, dict[str, Any]], None]) -> Callable[[], None]:
+        """Follow every device through the cloud's push channel.
+
+        `callback(device, changed)` is called on a background thread each time
+        a device reports: `changed` holds the new status by DP code and is
+        empty when only `device.online` changed. `device.status` and its
+        entities are up to date by then. Returns a function that ends the
+        subscription.
+
+        This works for devices that are not on the LAN too. For one device on
+        the LAN, `Device.watch` gets the same without the cloud.
+        """
+        devices = {device.id: device for device in self.devices()}
+
+        def on_message(message: dict[str, Any]) -> None:
+            try:
+                data = message.get("data") or {}
+                if message.get("protocol") == cloud_api.REPORT:
+                    device = devices.get(data.get("devId"))
+                    changed = device._apply_report(data.get("status") or ()) if device else {}
+                    if not changed:
+                        return
+                elif (kind := data.get("bizCode")) in ("online", "offline"):
+                    device = devices.get((data.get("bizData") or {}).get("devId"))
+                    if device is None:
+                        return
+                    device.info.online, changed = kind == "online", {}
+                else:
+                    return
+                callback(device, changed)
+            except Exception:  # must not take the SDK's network thread down
+                _LOGGER.exception("Error while handling a pushed message")
+
+        subscribed = [(d.id, bool(d.record.get("support_local"))) for d in devices.values()]
+        return self.cloud.listen(subscribed, self._homes(), on_message)
+
+    # -- for Device ---------------------------------------------------------
+
+    def _relocate(self, device: Device) -> bool:
         """Look for a device that stopped answering; True if it has a new address."""
         target = self.gateway_of(device) or device
         try:
-            found = discover({target.id: target.info.local_key}, timeout=6.0).get(target.id)
+            found = discover({target.id: target.local_key}, timeout=6.0).get(target.id)
         except LanError:
             return False
         if found is None or found == target.address:
             return False
-        target.moved(found)
+        target._moved(found)
         self._save()
         return True
 
-    def cloud_send(self, device: Device, commands: list[dict[str, Any]], reason: TuyaError) -> None:
+    def _cloud_send(
+        self, device: Device, commands: list[dict[str, Any]], reason: TuyaError
+    ) -> None:
         self._fall_back(device, reason).send(device.id, commands)
 
-    def cloud_refresh(self, device: Device, reason: TuyaError) -> None:
-        fresh = self._fall_back(device, reason).device(device.id)
+    def _cloud_refresh(self, device: Device, reason: TuyaError) -> None:
+        fresh = self._fall_back(device, reason).status(device.id)
         if fresh is None:
             raise CloudError(f"the cloud no longer lists {device.name}")
-        device.info.online = fresh["online"]
-        device.status.update(fresh["status"])
+        device._merge_cloud(fresh)
 
     def _fall_back(self, device: Device, reason: TuyaError) -> cloud_api.Cloud:
+        """The cloud, to do what the LAN could not; `reason` is raised if it may not be used."""
         if not self.cloud_fallback:
             raise reason
         _LOGGER.info("%s: %s; using the cloud", device.name, reason)
@@ -203,24 +283,52 @@ class Tuya:
 
     # -- storage ----------------------------------------------------------
 
-    def _load(self) -> list[Device]:
-        saved = self._read("devices.json")
-        addresses = {
-            dev_id: LanAddress(**address) for dev_id, address in saved.get("lan", {}).items()
-        }
-        return [
-            Device(self, record, addresses.get(record["id"])) for record in saved.get("devices", [])
-        ]
+    def _known(self) -> list[Device]:
+        """The saved devices, read on first use; empty if nothing usable is saved."""
+        with self._lock:
+            if self._devices is None:
+                saved = self._read("devices.json")
+                addresses = {
+                    dev_id: LanAddress(**address)
+                    for dev_id, address in saved.get("lan", {}).items()
+                }
+                self._home_ids = saved.get("homes", [])
+                self._devices = [
+                    Device(self, record, addresses.get(record["id"]))
+                    for record in saved.get("devices", [])
+                ]
+            return self._devices
+
+    def _fetch(self) -> list[Device]:
+        """Replace the device list with the cloud's, keeping known LAN addresses."""
+        with self._lock:
+            known = {device.id: device.address for device in self._known()}
+            cloud = self.cloud
+            self._devices = [
+                Device(self, record, known.get(record["id"])) for record in cloud.devices()
+            ]
+            self._home_ids = cloud.home_ids()
+            return self._devices
+
+    def _homes(self) -> list[str]:
+        with self._lock:
+            self._known()
+            if not self._home_ids:
+                self._home_ids = self.cloud.home_ids()
+                self._save()
+            return self._home_ids
 
     def _save(self) -> None:
-        devices = self._devices or []
-        self._write(
-            "devices.json",
-            {
-                "devices": [d.record for d in devices],
-                "lan": {d.id: vars(d.address) for d in devices if d.address},
-            },
-        )
+        with self._lock:
+            devices = self._devices or []
+            self._write(
+                "devices.json",
+                {
+                    "devices": [d.record for d in devices],
+                    "lan": {d.id: vars(d.address) for d in devices if d.address},
+                    "homes": self._home_ids,
+                },
+            )
 
     def _read(self, name: str) -> dict[str, Any]:
         try:
@@ -230,8 +338,10 @@ class Tuya:
 
     def _write(self, name: str, data: dict[str, Any]) -> None:
         """Write atomically and privately: these files hold tokens and local keys."""
-        self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = self.home / f".{name}.tmp"
-        with open(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as file:
-            json.dump(data, file, indent=1)
-        temporary.replace(self.home / name)
+        with self._lock:
+            self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
+            temporary = self.home / f".{name}.{os.getpid()}.tmp"
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            with open(os.open(temporary, flags, 0o600), "w") as file:
+                json.dump(data, file, indent=1)
+            temporary.replace(self.home / name)

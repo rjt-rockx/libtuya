@@ -56,7 +56,7 @@ tuya control lamp brightness 60      # percent
 tuya control lamp color ff8800
 tuya control lamp temperature 3000   # kelvin for a light, degrees for a thermostat
 tuya info lamp                       # every entity and its current value
-tuya set heater number.temp_set 21.5
+tuya set heater climate set_temperature=21.5
 tuya set lamp light brightness=128 color_temp=4000
 tuya set plug countdown_1 60 --raw   # a raw DP code, unscaled
 tuya watch plug                      # print changes as the device reports them
@@ -84,7 +84,7 @@ plug.refresh()  # read the device, returns status by DP code
 plug.status  # {"switch_1": True, "cur_power": 127, ...}
 plug.transport  # "lan" or "cloud": what served the last call
 plug.turn_off()
-plug.set(countdown_1=60)  # raw DP codes, unscaled values
+plug.set_raw(countdown_1=60)  # DP codes directly, unscaled values
 
 for entity in plug.entities:  # what Home Assistant would show
     print(entity.id, entity.name, entity.state())
@@ -93,7 +93,7 @@ plug.entity("sensor.cur_power").value  # 12.7  (scaled, in entity.wrappers[...].
 lamp = tuya.device("Living room")
 light = lamp.entity("light")
 light.turn_on(brightness=200, hs=(30, 80))  # brightness 0-255, hue 0-360, saturation 0-100
-light.set(color_temp=2700)
+light.turn_on(kelvin=2700)
 
 for changed in plug.watch():  # blocks; pushes from the device
     print(changed)
@@ -103,11 +103,12 @@ The API is synchronous, because TinyTuya and the sharing SDK are. From asyncio
 use `await asyncio.to_thread(lamp.turn_on)`. Calls on one device are
 serialised, so sharing a `Tuya` between threads is fine.
 
-Errors are exceptions, all subclasses of `libtuya.TuyaError`: `NotLoggedIn`,
-`DeviceNotFound`, `CloudError`, `LanError`.
+Failures raise subclasses of `libtuya.TuyaError` (`NotLoggedIn`,
+`DeviceNotFound`, `CloudError`, `LanError`); a value a device does not accept
+raises `ValueError`.
 
-The layers are usable on their own: `libtuya.lan` (discovery, connections),
-`libtuya.dpmap` (LAN datapoints to and from cloud codes), `libtuya.entities`.
+The lower layers are usable on their own: `libtuya.lan` (discovery,
+connections) and `libtuya.dpmap` (LAN datapoints to and from cloud codes).
 [docs/architecture.md](docs/architecture.md) explains how they fit.
 
 ## What to expect
@@ -127,8 +128,8 @@ The layers are usable on their own: `libtuya.lan` (discovery, connections),
   derived from the cloud value (light scenes and music mode, a few
   enumerations). Reading them locally works.
 - **Thermostats are in Celsius.**
-- **Not covered**: camera streams, infrared remotes, scenes, cloud push
-  updates, and devices for which the cloud publishes no datapoints.
+- **Not covered**: infrared remotes, and devices for which the cloud publishes
+  no datapoints.
 
 ## How it compares
 

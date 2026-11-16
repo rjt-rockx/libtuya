@@ -73,6 +73,51 @@ def test_light_attributes_use_friendly_units(make_device):
     assert light.commands(brightness=128) == [{"code": "bright_value_v2", "value": 507}]
 
 
+def test_on_and_off_for_every_kind_of_device(make_device):
+    valve = make_device("ggq_7ytb3h8u").power
+    assert (valve.id, valve.on_off) == ("valve.switch", "control")
+    assert valve.commands(control=True) == [{"code": "switch", "value": True}]
+    assert make_device("sgbj_ulv4nnue7gqp0rjk").power.on_off == "siren"
+    # A fan with a light is two things; neither is silently preferred.
+    with pytest.raises(TuyaError, match="several switches"):
+        _ = make_device("fs_g0ewlb1vmwqljzji").power
+    with pytest.raises(TuyaError, match="nothing to switch"):
+        _ = make_device("cl_zah67ekd").power
+
+
+def test_entities_describe_themselves(make_device):
+    device = make_device("znjdq_au6dqazvkxqnpaak")
+    assert device.entity("sensor.cur_power").describe() == {
+        "sensor": {
+            "value": 14.3,
+            "writable": False,
+            "unit": "W",
+            "min": 0.0,
+            "max": 26000.0,
+            "step": 0.1,
+        }
+    }
+    mode = device.entity("select.light_mode").describe()["select"]
+    assert (mode["value"], mode["writable"], mode["options"]) == (
+        "relay",
+        True,
+        ["relay", "pos", "none", "on"],
+    )
+
+
+def test_a_light_refuses_what_it_cannot_do(make_device):
+    dimmer = make_device("dj_bSXSSFArVKtc4DyC").entity("light")
+    with pytest.raises(TuyaError, match="no adjustable colour"):
+        dimmer.turn_on(hs=(0, 100))
+    bulb = make_device("dj_k3okx0w3bsgmindp").entity("light")
+    with pytest.raises(ValueError, match="hue 0-360"):
+        bulb.set(color_data=(400, 150, 999))
+    with pytest.raises(ValueError, match="out of range 0 to 255"):
+        bulb.set(brightness=999)
+    with pytest.raises(ValueError, match="does not accept"):
+        bulb.set(brightness="high")
+
+
 def test_bad_requests_are_explained(make_device):
     device = make_device("znjdq_au6dqazvkxqnpaak")
     with pytest.raises(TuyaError, match="read-only"):

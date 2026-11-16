@@ -34,9 +34,9 @@ Concretely, compared with using the pieces yourself:
   configured, including for devices where the SDK throws it away.
 - **Writes are translated back to raw datapoints**, which none of the upstream
   libraries do (the cloud normally does it server-side).
-- **The entities are Home Assistant's.** For Home Assistant's 336 device
-  fixtures libtuya builds exactly the entities in Home Assistant's own test
-  snapshots (1,565 of them).
+- **The entities are Home Assistant's.** A test checks that for every device
+  fixture in the vendored Home Assistant release (329 real devices), libtuya
+  builds exactly the entities in Home Assistant's own test snapshots.
 
 ## Where the others are stronger
 

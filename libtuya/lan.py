@@ -24,11 +24,17 @@ from .errors import LanError
 # must not inherit a root logger set to DEBUG.
 logging.getLogger("tinytuya").setLevel(logging.INFO)
 
+VERSIONS = ("3.1", "3.2", "3.3", "3.4", "3.5")
 # Versions to try when only the IP is known, most common first.
 PROBE_VERSIONS = ("3.3", "3.4", "3.5", "3.1")
 # TinyTuya error codes that mean "nothing answered at this address".
 UNREACHABLE = {"901", "905"}
 HEARTBEAT_INTERVAL = 10.0
+# While watching, how often to ask for the full status in case a push was missed.
+FULL_STATUS_INTERVAL = 30.0
+# Protocol 3.2 devices are asked for datapoints by id, a few per request
+# (requests are limited to 255 bytes), always including dp 1.
+DPS_PER_REQUEST = 10
 
 
 @dataclass(frozen=True)
@@ -45,10 +51,10 @@ class LanAddress:
 def discover(keys: Mapping[str, str], timeout: float = 8.0) -> dict[str, LanAddress]:
     """Listen for device broadcasts and return the addresses of the wanted ids.
 
-    `keys` maps device id to local key (needed to read some broadcasts).
-    Returns as soon as every wanted device has been heard, else after
-    `timeout`. Devices on another subnet or VLAN, battery devices and
-    sub-devices of a gateway do not show up.
+    `keys` maps device id to local key (empty if unknown). Returns as soon as
+    every wanted device has been heard, which never happens if one of them is
+    switched off, battery powered, on another subnet or a gateway's
+    sub-device; then it returns after `timeout` seconds.
     """
     if not keys:
         return {}
@@ -71,6 +77,14 @@ def discover(keys: Mapping[str, str], timeout: float = 8.0) -> dict[str, LanAddr
     }
 
 
+def _error(result: Mapping[str, Any]) -> LanError:
+    code = str(result["Err"])
+    message = f"{result.get('Error')} (TinyTuya error {code})"
+    if code == "914":
+        message += "; if the device was re-paired its key has changed, refresh the device list"
+    return LanError(message, code)
+
+
 class Connection:
     """A TinyTuya session with one device, or with a sub-device via its gateway."""
 
@@ -84,84 +98,111 @@ class Connection:
         cid: str | None = None,
         parent: Connection | None = None,
         persist: bool = False,
-        timeout: float = 3.0,
+        timeout: float = 5.0,
     ) -> None:
-        self._dp_ids = {str(dp_id): None for dp_id in dp_ids}
+        self._dp_ids = [str(dp_id) for dp_id in dp_ids]
         self._parent = parent
+        self._cid = cid
+        self._by_id = False
         if parent is not None:
+            if parent._by_id:
+                # TinyTuya would probe every datapoint range from the constructor.
+                raise LanError("sub-devices of a protocol 3.2 gateway are not supported on the LAN")
             self._lock = parent._lock
-            self._device = tinytuya.Device(dev_id, cid=cid, parent=parent._device)
+            with self._lock:  # registers itself on the gateway's TinyTuya object
+                self._device = tinytuya.Device(dev_id, cid=cid, parent=parent._device)
             return
         if address is None:
             raise LanError(f"no LAN address known for {dev_id}")
         self._lock = threading.Lock()
-        # Protocol 3.2 probes the device from the constructor unless the
-        # datapoints to request are already set, so it is applied afterwards.
-        version = float(address.version)
+        self._by_id = address.version == "3.2"
         self._device = tinytuya.Device(
             dev_id,
             address.ip,
             local_key,
-            version=3.3 if version == 3.2 else version,
+            # 3.2 is 3.3 on the wire; given directly it makes TinyTuya probe the
+            # device from the constructor, so it is selected below instead.
+            version=3.3 if self._by_id else float(address.version),
             port=address.port,
             persist=persist,
             connection_timeout=timeout,
             connection_retry_limit=1,
             connection_retry_delay=0,
         )
-        if version == 3.2:
-            self._device.set_dpsUsed(dict(self._dp_ids))
+        # TinyTuya can decide from an error reply that a device must be asked
+        # for datapoints by id, and from then on "asks" with a command that
+        # some devices take as a write of nulls. Only do that for 3.2 devices.
+        self._device.disabledetect = True
+        if self._by_id:
+            self._device.set_dpsUsed({"1": None})
             self._device.set_version(3.2)
 
+    @property
+    def _socket_owner(self) -> Any:
+        """The TinyTuya object that owns the socket: the gateway's for a sub-device."""
+        return (self._parent or self)._device
+
     def _call(
-        self, function: Callable[..., Any], *args: Any, await_report: bool = True
+        self, function: Callable[..., Any], *args: Any, write: bool = False
     ) -> dict[str, Any]:
         """Run a TinyTuya call and return the datapoints it reported, if any."""
-        # The socket, and with it this setting, belongs to the gateway for a sub-device.
-        owner = (self._parent or self)._device
+        owner = self._socket_owner
         with self._lock:
-            owner.set_retry(await_report)
+            # A write returns on the device's acknowledgement and is sent once:
+            # by default TinyTuya waits for a status report that some devices
+            # never send, and re-sends the command when no reply arrives.
+            owner.set_retry(not write)
+            owner.set_sendRetryLimit(0 if write else None)
             try:
                 result = function(*args)
+                rejected = write and owner.cmd_retcode
             finally:
                 owner.set_retry(True)
-        if not result:
+                owner.set_sendRetryLimit(None)
+        if result and "Err" in result:
+            raise _error(result)
+        if rejected:
+            raise LanError(f"the device refused the command (code {rejected})")
+        result = result or {}
+        # A gateway's connection also carries its sub-devices' reports.
+        if (result.get("cid") or (result.get("data") or {}).get("cid")) != self._cid:
             return {}
-        if "Err" in result:
-            raise LanError(f"{result.get('Error')} (TinyTuya error {result['Err']})", result["Err"])
         return dict(result.get("dps") or {})
 
     def status(self) -> dict[str, Any]:
         """Query the device's datapoints, keyed by dp id as a string."""
-        dps = self._call(self._device.status)
-        if (
-            self._device.dev_type == "device22"
-            and self._dp_ids.keys() - self._device.dps_to_request
-        ):
-            # Such devices only report the datapoints they are asked for, and
-            # TinyTuya asks for dp 1 alone once it has detected one.
-            self._device.set_dpsUsed(dict(self._dp_ids))
-            dps = self._call(self._device.status)
+        if self._parent is not None or not self._by_id:
+            return self._call(self._device.status)
+        dps: dict[str, Any] = {}
+        wanted = [dp_id for dp_id in self._dp_ids if dp_id != "1"]
+        for start in range(0, len(wanted) or 1, DPS_PER_REQUEST):
+            chunk = ["1", *wanted[start : start + DPS_PER_REQUEST]]
+            self._device.set_dpsUsed(dict.fromkeys(chunk))
+            dps |= self._call(self._device.status)
         return dps
 
     def set(self, dps: Mapping[str, Any]) -> dict[str, Any]:
-        """Write datapoints and return once the device has acknowledged them.
+        """Write datapoints; returns what the device reported by the time it acknowledged."""
+        return self._call(self._device.set_multiple_values, dict(dps), write=True)
 
-        The status report a device usually sends next is not awaited: a device
-        that sends none (some do not when nothing changed) would stall the call
-        for the whole timeout. Returns what was reported by then, if anything.
+    def updates(self) -> Iterator[tuple[dict[str, Any], bool]]:
+        """Yield datapoints as they come in, forever, with whether the device pushed them.
+
+        Needs `persist=True`. Starts with the full status (not a push) and
+        asks for it again now and then, so a push lost to a dropped connection
+        is made up for.
         """
-        return self._call(self._device.set_multiple_values, dict(dps), await_report=False)
-
-    def updates(self) -> Iterator[dict[str, Any]]:
-        """Yield datapoint changes as the device reports them, forever.
-
-        Needs `persist=True`. Starts with the full status.
-        """
-        yield self.status()
-        last_heartbeat = time.monotonic()
+        last_heartbeat = last_status = 0.0
         payload_errors = 0
         while True:
+            now = time.monotonic()
+            if now - last_status >= FULL_STATUS_INTERVAL:
+                yield self.status(), False
+                last_heartbeat = last_status = time.monotonic()
+                continue
+            if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+                self._call(self._device.heartbeat)
+                last_heartbeat = now
             try:
                 dps = self._call(self._device.receive)
                 payload_errors = 0
@@ -172,12 +213,9 @@ class Connection:
                 payload_errors += 1
                 if err.code != "904" or payload_errors > 3:
                     raise
-                dps = {}
+                continue
             if dps:
-                yield dps
-            if time.monotonic() - last_heartbeat >= HEARTBEAT_INTERVAL:
-                self._call(self._device.heartbeat)
-                last_heartbeat = time.monotonic()
+                yield dps, True
 
     def close(self) -> None:
         with self._lock:
@@ -186,15 +224,19 @@ class Connection:
                 self._parent._device.close()
 
 
-def probe_version(dev_id: str, local_key: str, ip: str) -> LanAddress:
-    """Find the protocol version of a device whose IP was given by hand.
+def probe_version(
+    dev_id: str, local_key: str, ip: str, version: str | None = None, timeout: float = 5.0
+) -> LanAddress:
+    """Confirm a device answers at `ip`, finding its protocol version if not given.
 
     Each version is tried once: repeated failed 3.4/3.5 handshakes can make a
     device refuse connections until it is power-cycled.
     """
+    if version is not None and version not in VERSIONS:
+        raise ValueError(f"protocol version must be one of {', '.join(VERSIONS)}")
     last: LanError | None = None
-    for version in PROBE_VERSIONS:
-        connection = Connection(dev_id, local_key, LanAddress(ip, version))
+    for candidate in (version,) if version else PROBE_VERSIONS:
+        connection = Connection(dev_id, local_key, LanAddress(ip, candidate), timeout=timeout)
         try:
             connection.status()
         except LanError as err:
@@ -202,7 +244,7 @@ def probe_version(dev_id: str, local_key: str, ip: str) -> LanAddress:
             if err.code in UNREACHABLE:
                 break
         else:
-            return LanAddress(ip, version)
+            return LanAddress(ip, candidate)
         finally:
             connection.close()
     raise LanError(f"{dev_id} did not answer at {ip}: {last}")

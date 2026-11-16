@@ -4,22 +4,25 @@ from __future__ import annotations
 
 import argparse
 import colorsys
+import enum
 import json
 import logging
 import sys
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
 from . import Device, Entity, Light, Tuya, TuyaError, __version__
 
-USER_CODE_HINT = "Smart Life or Tuya Smart app: Me > Settings > Account and Security > User Code"
+USER_CODE_HINT = "Smart Life or Tuya Smart app: Me > gear icon > Account and Security > User Code"
 
 # A command returns the data for --json and the text for people.
 Result = tuple[dict[str, Any], str]
 
 
 def _show(value: Any) -> str:
+    """A value as people read it."""
     if isinstance(value, bool):
         return "on" if value else "off"
     if isinstance(value, float):
@@ -29,8 +32,17 @@ def _show(value: Any) -> str:
     return str(value)
 
 
-def _jsonable(value: Any) -> Any:
-    return value if isinstance(value, (bool, int, float, str, type(None))) else _show(value)
+def _plain(value: Any) -> Any:
+    """A value as JSON can carry it."""
+    if isinstance(value, enum.Enum):
+        return value.value
+    if isinstance(value, (bool, int, float, str, type(None))):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_plain(item) for item in value]
+    return str(value)
 
 
 def _parse(text: str) -> Any:
@@ -43,15 +55,31 @@ def _parse(text: str) -> Any:
         return text
 
 
+def _parse_for(entity: Entity, attribute: str | None, text: str) -> Any:
+    """Read a value for an entity attribute; a choice the device offers is taken as typed."""
+    wrapper = entity.wrappers.get(attribute or next(iter(entity.wrappers)))
+    choices = [str(option) for option in getattr(wrapper, "options", None) or ()]
+    return text if text in choices else _parse(text)
+
+
+def _where(tuya: Tuya, device: Device) -> str:
+    """Where a device is on the LAN, in words."""
+    if device.address:
+        return str(device.address)
+    gateway = tuya.gateway_of(device)
+    return f"via {gateway.name}" if gateway else "not found (cloud only)"
+
+
 def _entity_line(entity: Entity) -> str:
-    state = entity.state()
-    if len(state) == 1:
-        ((attribute, value),) = state.items()
-        unit = getattr(entity.wrappers[attribute], "native_unit", None) or ""
-        shown = f"{_show(value)} {unit}".rstrip()
+    described = entity.describe()
+    if len(described) == 1:
+        (details,) = described.values()
+        shown = f"{_show(details['value'])} {details.get('unit', '')}".rstrip()
     else:
         shown = "  ".join(
-            f"{key}={_show(value)}" for key, value in state.items() if value is not None
+            f"{attribute}={_show(details['value'])}"
+            for attribute, details in described.items()
+            if details["value"] is not None
         )
     return f"  {entity.id:34} {entity.name or '':28} {shown}"
 
@@ -61,32 +89,28 @@ def _device_data(device: Device) -> dict[str, Any]:
         "id": device.id,
         "name": device.name,
         "category": device.category,
-        "product": device.info.product_name,
+        "product": device.product_name,
         "ip": device.address.ip if device.address else None,
         "version": device.address.version if device.address else None,
     }
 
 
-def _describe(device: Device) -> Result:
+def _describe(tuya: Tuya, device: Device) -> Result:
     """Current state of a device, entity by entity."""
     entities = {
-        entity.id: {
-            "name": entity.name,
-            "state": {key: _jsonable(value) for key, value in entity.state().items()},
-        }
+        entity.id: {"name": entity.name, "attributes": _plain(entity.describe())}
         for entity in device.entities
     }
-    address = device.address or "not found"
     lines = [
-        f"{device.name}  [{device.info.product_name}, category {device.category}]",
-        f"  id {device.id}   LAN {address}   read via {device.transport or 'cache'}",
+        f"{device.name}  [{device.product_name}, category {device.category}]",
+        f"  id {device.id}   LAN {_where(tuya, device)}   read via {device.transport}",
         *(_entity_line(entity) for entity in device.entities),
     ]
     if not device.entities:
         lines += ["  (no known entities; raw status below)", f"  {device.status}"]
     data = _device_data(device) | {
         "transport": device.transport,
-        "status": device.status,
+        "status": _plain(device.status),
         "entities": entities,
     }
     return {"device": data}, "\n".join(lines)
@@ -95,7 +119,10 @@ def _describe(device: Device) -> Result:
 def login(tuya: Tuya, args: argparse.Namespace) -> Result:
     if tuya.logged_in and not args.force:
         return {"message": "Already logged in"}, "Already logged in (use --force to log in again)."
-    user_code = args.user_code or input(f"User code ({USER_CODE_HINT}): ").strip()
+    user_code = args.user_code
+    if not user_code:
+        print(f"User code ({USER_CODE_HINT}): ", end="", file=sys.stderr, flush=True)
+        user_code = input().strip()
 
     def show_qr(text: str) -> None:
         import qrcode
@@ -123,7 +150,7 @@ def logout(tuya: Tuya, args: argparse.Namespace) -> Result:
 def devices(tuya: Tuya, args: argparse.Namespace) -> Result:
     found = tuya.devices(refresh=args.refresh)
     rows = [
-        (str(index), device.name, device.info.product_name, device.category, _lan(tuya, device))
+        (str(index), device.name, device.product_name, device.category, _where(tuya, device))
         for index, device in enumerate(found, 1)
     ]
     header = ("#", "Name", "Product", "Cat.", "LAN")
@@ -136,66 +163,59 @@ def devices(tuya: Tuya, args: argparse.Namespace) -> Result:
     return {"devices": data, "count": len(data)}, "\n".join(lines)
 
 
-def _lan(tuya: Tuya, device: Device) -> str:
-    if device.address:
-        return str(device.address)
-    gateway = tuya.gateway_of(device)
-    return f"via {gateway.name}" if gateway else "not found (cloud only)"
-
-
 def info(tuya: Tuya, args: argparse.Namespace) -> Result:
     device = tuya.device(args.device)
     device.refresh()
-    return _describe(device)
+    return _describe(tuya, device)
 
 
 def control(tuya: Tuya, args: argparse.Namespace) -> Result:
     device = tuya.device(args.device)
     action = args.action.lower()
     value = args.value
+    if action == "status":
+        return info(tuya, args)
 
-    def need_value() -> str:
-        if value is None:
-            raise TuyaError(f"`{action}` needs a value")
-        return value
+    def entity() -> Entity:
+        return device.entity(args.entity) if args.entity else device.power
 
     def light() -> Light:
-        entity = device.entity(args.entity) if args.entity else device.power
-        if not isinstance(entity, Light):
-            raise TuyaError(f"{entity.id} is not a light")
-        return entity
+        if not isinstance(chosen := entity(), Light):
+            raise TuyaError(f"{chosen.id} is not a light")
+        return chosen
 
-    if action == "status":
-        device.refresh()
-        return _describe(device)
-    if action in ("on", "off"):
-        entity = device.entity(args.entity) if args.entity else device.power
-        entity.set(switch=action == "on")
-    elif action == "toggle":
-        device.refresh()
-        entity = device.entity(args.entity) if args.entity else device.power
-        entity.set(switch=not entity.value)
-    elif action == "brightness":
-        percent = float(need_value())
-        if not 0 <= percent <= 100:
-            raise TuyaError("brightness is a percentage, 0 to 100")
-        device.refresh()  # whether to dim the colour or the white depends on the current mode
-        light().turn_on(brightness=percent * 255 / 100)
-    elif action == "color":
-        text = need_value().lstrip("#")
-        if len(text) != 6:
-            raise TuyaError("color is given as RRGGBB, for example ff8800")
-        red, green, blue = (int(text[index : index + 2], 16) / 255 for index in (0, 2, 4))
-        hue, saturation, brightness = colorsys.rgb_to_hsv(red, green, blue)
-        light().turn_on(hs=(hue * 360, saturation * 100), brightness=round(brightness * 255))
-    elif action == "temperature":
-        number = float(need_value())
-        if args.entity or any(isinstance(entity, Light) for entity in device.entities):
-            light().turn_on(kelvin=round(number))  # colour temperature in kelvin
+    def number() -> float:
+        if value is None:
+            raise TuyaError(f"`{action}` needs a value")
+        return float(value)
+
+    with device.connected():
+        if action in ("on", "off"):
+            entity().set(switch=action == "on")
+        elif action == "toggle":
+            device.refresh()
+            entity().set(switch=not entity().value)
+        elif action == "brightness":
+            if not 0 <= (percent := number()) <= 100:
+                raise TuyaError("brightness is a percentage, 0 to 100")
+            device.refresh()  # whether to dim the colour or the white depends on the mode
+            light().turn_on(brightness=percent * 255 / 100)
+        elif action == "color":
+            text = (value or "").lstrip("#")
+            if len(text) != 6:
+                raise TuyaError("color is given as RRGGBB, for example ff8800")
+            red, green, blue = (int(text[index : index + 2], 16) / 255 for index in (0, 2, 4))
+            hue, saturation, brightness = colorsys.rgb_to_hsv(red, green, blue)
+            light().turn_on(hs=(hue * 360, saturation * 100), brightness=brightness * 255)
+        elif action == "temperature":
+            # Degrees for a thermostat; kelvin for a light, or when a light is named.
+            climate = [e for e in device.entities if e.platform == "climate"]
+            if climate and not args.entity:
+                climate[0].set(set_temperature=number())
+            else:
+                light().turn_on(kelvin=round(number()))
         else:
-            device.entity("climate").set(set_temperature=number)
-    else:
-        raise TuyaError(f"unknown action {action!r}")
+            raise TuyaError(f"unknown action {action!r}")
     data = {"device": device.name, "action": action, "value": value, "transport": device.transport}
     return data, f"{device.name}: {action}{' ' + value if value else ''} (via {device.transport})"
 
@@ -205,15 +225,15 @@ def set_(tuya: Tuya, args: argparse.Namespace) -> Result:
     if args.raw:
         if len(args.values) != 1:
             raise TuyaError("--raw takes a DP code and one value")
-        device.set({args.target: _parse(args.values[0])})
+        device.set_raw({args.target: _parse(args.values[0])})
         target = args.target
     else:
         entity = device.entity(args.target)
         if all("=" in value for value in args.values):
-            pairs = (value.split("=", 1) for value in args.values)
-            entity.set(**{attribute: _parse(value) for attribute, value in pairs})
+            pairs = [value.split("=", 1) for value in args.values]
+            entity.set(**{name: _parse_for(entity, name, text) for name, text in pairs})
         elif len(args.values) == 1:
-            entity.set(_parse(args.values[0]))
+            entity.set(_parse_for(entity, None, args.values[0]))
         else:
             raise TuyaError("give one value, or attribute=value pairs")
         target = entity.id
@@ -227,13 +247,42 @@ def watch(tuya: Tuya, args: argparse.Namespace) -> Result:
     try:
         for changed in device.watch():
             if args.json:
-                print(json.dumps(changed), flush=True)
+                print(json.dumps(_plain(changed)), flush=True)
             else:
                 shown = "  ".join(f"{code}={_show(value)}" for code, value in changed.items())
                 print(f"{time.strftime('%H:%M:%S')}  {shown}", flush=True)
     except KeyboardInterrupt:
         pass
     return {}, ""
+
+
+def listen(tuya: Tuya, args: argparse.Namespace) -> Result:
+    def show(device: Device, changed: dict[str, Any]) -> None:
+        if args.json:
+            line = json.dumps({"device": device.name, "online": device.online} | _plain(changed))
+        else:
+            shown = "  ".join(f"{code}={_show(value)}" for code, value in changed.items())
+            line = f"{time.strftime('%H:%M:%S')}  {device.name}: {shown or _show(device.online)}"
+        print(line, flush=True)
+
+    stop = tuya.subscribe(show)
+    print("Listening to the cloud for every device; Ctrl-C to stop.", file=sys.stderr)
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        stop()
+    return {}, ""
+
+
+def scenes(tuya: Tuya, args: argparse.Namespace) -> Result:
+    found = tuya.scenes()
+    data = [{"id": scene.id, "name": scene.name, "enabled": scene.enabled} for scene in found]
+    return {"scenes": data}, "\n".join(scene.name for scene in found) or "No scenes."
+
+
+def scene(tuya: Tuya, args: argparse.Namespace) -> Result:
+    tuya.run_scene(args.name)
+    return {"scene": args.name}, f"Ran {args.name}."
 
 
 def scan(tuya: Tuya, args: argparse.Namespace) -> Result:
@@ -247,14 +296,12 @@ def scan(tuya: Tuya, args: argparse.Namespace) -> Result:
 def locate(tuya: Tuya, args: argparse.Namespace) -> Result:
     device = tuya.device(args.device)
     address = tuya.locate(device, args.ip, args.protocol)
-    return {
-        "device": device.name,
-        **vars(address),
-    }, f"{device.name}: {address}"
+    return {"device": device.name, **vars(address)}, f"{device.name}: {address}"
 
 
 def health(tuya: Tuya, args: argparse.Namespace) -> Result:
-    known = tuya.devices() if tuya.logged_in or (tuya.home / "devices.json").exists() else []
+    # Only what is saved: this command must not log in, fetch or scan.
+    known = tuya.devices() if (tuya.home / "devices.json").exists() else []
     data = {
         "home": str(tuya.home),
         "logged_in": tuya.logged_in,
@@ -271,7 +318,9 @@ def health(tuya: Tuya, args: argparse.Namespace) -> Result:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="tuya", description="Control Tuya devices, locally where possible."
+        prog="tuya",
+        description="Control Tuya devices, locally where possible.",
+        epilog="Options above go before the command; --json goes after it.",
     )
     parser.add_argument("--version", action="version", version=f"libtuya {__version__}")
     parser.add_argument(
@@ -289,6 +338,7 @@ def _parser() -> argparse.ArgumentParser:
         command.set_defaults(handler=handler)
         return command
 
+    device_help = "number from `tuya devices`, name, part of a name, or id"
     command = add(
         "login", login, "Log in by scanning a QR code with the Smart Life or Tuya Smart app"
     )
@@ -301,15 +351,16 @@ def _parser() -> argparse.ArgumentParser:
     command.add_argument(
         "--refresh", action="store_true", help="ask the cloud again and rescan the LAN"
     )
-    command = add("info", info, "Show a device and the current state of its entities")
-    command.add_argument("device", help="number from `tuya devices`, name, part of a name, or id")
+    command = add("info", info, "Read a device and show its entities")
+    command.add_argument("device", help=device_help)
     command = add(
         "control", control, "Switch a device, or set a light's brightness, color or temperature"
     )
-    command.add_argument("device")
+    command.add_argument("device", help=device_help)
     command.add_argument(
         "action",
-        help="on, off, toggle, status, brightness PERCENT, color RRGGBB, temperature VALUE",
+        help="on, off, toggle, status, brightness PERCENT, color RRGGBB, "
+        "temperature DEGREES (thermostat) or KELVIN (light)",
     )
     command.add_argument("value", nargs="?")
     command.add_argument(
@@ -318,22 +369,27 @@ def _parser() -> argparse.ArgumentParser:
     command = add(
         "set",
         set_,
-        "Set an entity (`set DEVICE number.temp_set 21.5`, `set DEVICE light brightness=128`)",
+        "Set an entity: `set DEVICE switch.child_lock on`, "
+        "`set DEVICE climate set_temperature=21.5`",
     )
-    command.add_argument("device")
+    command.add_argument("device", help=device_help)
     command.add_argument("target", help="entity id, key or name; with --raw, a DP code")
-    command.add_argument("values", nargs="+", metavar="VALUE")
+    command.add_argument("values", nargs="+", metavar="VALUE", help="a value, or ATTRIBUTE=VALUE")
     command.add_argument(
         "--raw", action="store_true", help="write a DP code with an unscaled value"
     )
     command = add("watch", watch, "Print status changes as the device reports them")
-    command.add_argument("device")
+    command.add_argument("device", help=device_help)
+    add("listen", listen, "Print status changes of every device, as pushed by the cloud")
+    add("scenes", scenes, "List the scenes defined in the app")
+    command = add("scene", scene, "Run a scene")
+    command.add_argument("name", help="scene name or id")
     command = add("scan", scan, "Look for the devices on the LAN")
-    command.add_argument("--timeout", type=float, default=8.0)
+    command.add_argument("--timeout", type=float, default=8.0, help="seconds to listen")
     command = add("locate", locate, "Set a device's LAN address by hand")
-    command.add_argument("device")
+    command.add_argument("device", help=device_help)
     command.add_argument("ip")
-    command.add_argument("--protocol", help="protocol version, e.g. 3.4 (probed if omitted)")
+    command.add_argument("--protocol", help="protocol version, e.g. 3.4 (found out if omitted)")
     add("health", health, "Show login and device cache state")
     return parser
 
@@ -350,14 +406,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         data, text = args.handler(Tuya(args.home, cloud_fallback=not args.local), args)
     except (TuyaError, ValueError) as err:
-        message = str(err)
         if args.json:
-            print(json.dumps({"success": False, "error": message}))
+            print(json.dumps({"success": False, "error": str(err)}))
         else:
-            print(f"error: {message}", file=sys.stderr)
+            print(f"error: {err}", file=sys.stderr)
         return 1
-    if args.json and args.command != "watch":
-        print(json.dumps({"success": True, **data}, default=str))
+    if args.json and args.command not in ("watch", "listen"):
+        print(json.dumps({"success": True, **data}))
     elif text:
         print(text)
     return 0

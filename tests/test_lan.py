@@ -11,8 +11,9 @@ import threading
 import pytest
 import tinytuya
 from conftest import fake, local_key, record
+from fake_device import FakeTuyaDevice
 
-from libtuya import LanError, Tuya
+from libtuya import Device, LanError, Tuya
 from libtuya import client as client_module
 from libtuya.lan import LanAddress, discover
 
@@ -20,7 +21,7 @@ BULB = "dj_k3okx0w3bsgmindp"  # RGB+white bulb: dps 20 switch, 21 mode, 22 brigh
 PLUG = "znjdq_au6dqazvkxqnpaak"  # metering plug: dps 1 switch, 17 energy, 19 power, 41 child lock
 GATEWAY = "wfcon_b25mh8sxawsgndck"
 BULB_DPS = {"20": False, "21": "white", "22": 500, "23": 1000, "24": "000003e803e8"}
-PLUG_DPS = {"1": False, "18": 258, "19": 143, "20": 2286, "38": "memory", "41": False}
+PLUG_DPS = {"1": False, "17": 3, "18": 258, "19": 143, "20": 2286, "38": "memory", "41": False}
 
 
 class StubCloud:
@@ -32,8 +33,8 @@ class StubCloud:
     def send(self, device_id, commands):
         self.sent.append((device_id, commands))
 
-    def device(self, device_id):
-        return record(device_id)
+    def status(self, device_id):
+        return {"online": True, "status": record(device_id)["status"]}
 
 
 @pytest.fixture(params=["3.3", "3.4", "3.5"])
@@ -81,7 +82,7 @@ def test_switching_and_reading_a_plug(plug):
     power = device.entity("sensor.cur_power")
     assert (power.value, power.wrappers["sensor"].native_unit) == (127.0, "W")
 
-    device.set(child_lock=True)  # a raw DP code
+    device.set_raw(child_lock=True)  # a DP code, unscaled
     assert on_the_wire.dps["41"] is True
 
 
@@ -90,7 +91,7 @@ def test_the_cloud_takes_over_when_the_lan_cannot(bulb, tuya):
     tuya._cloud = cloud = StubCloud()
 
     # A scene has no exact LAN form, so it goes through the cloud ...
-    device.set(scene_data_v2='{"scene_num": 2}')
+    device.set_raw(scene_data_v2='{"scene_num": 2}')
     assert cloud.sent == [(BULB, [{"code": "scene_data_v2", "value": '{"scene_num": 2}'}])]
     assert (device.transport, on_the_wire.received) == ("cloud", [])
 
@@ -103,6 +104,39 @@ def test_the_cloud_takes_over_when_the_lan_cannot(bulb, tuya):
     tuya.cloud_fallback = False
     with pytest.raises(LanError):
         device.turn_off()
+
+
+def test_an_answer_without_any_status_is_not_taken_for_one(make_device, tuya):
+    tuya._cloud = StubCloud()
+    with fake(PLUG, "3.3", {}) as on_the_wire:
+        device = make_device(PLUG, LanAddress("127.0.0.1", "3.3", on_the_wire.port))
+        device.refresh()
+        assert device.transport == "cloud"
+
+
+def test_a_command_nobody_acknowledged_is_sent_once(make_device, tuya):
+    """Neither TinyTuya's retries nor the cloud may repeat it: it could be "feed the cat"."""
+    tuya.timeout = 0.3
+    tuya._cloud = cloud = StubCloud()
+    received = []
+
+    def swallow(server: socket.socket) -> None:
+        try:
+            while True:
+                connection, _ = server.accept()
+                with connection:
+                    while data := connection.recv(4096):
+                        received.append(data)
+        except OSError:
+            pass  # the server was closed
+
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        threading.Thread(target=swallow, args=(server,), daemon=True).start()
+        device = make_device(PLUG, LanAddress("127.0.0.1", "3.3", server.getsockname()[1]))
+        with pytest.raises(LanError, match="may or may not"):
+            device.turn_on()
+    assert b"".join(received).count(bytes.fromhex("000055aa")) == 1
+    assert cloud.sent == []
 
 
 def test_a_wrong_local_key_is_reported(make_device, tuya):
@@ -181,3 +215,25 @@ def test_discovery_reads_device_broadcasts():
         found_it.set()
         announcer.join()
     assert found == {PLUG: LanAddress("127.0.0.1", "3.4")}
+
+
+def test_a_hub_without_a_key_of_its_own(tuya):
+    """Some hubs come without a local key; their sub-devices carry the one the hub answers to."""
+    hub_record = record(GATEWAY)
+    del hub_record["local_key"]
+    key = local_key(PLUG)
+    with FakeTuyaDevice(GATEWAY, key, "3.4", cids={"node-1": dict(PLUG_DPS)}) as on_the_wire:
+        hub = Device(tuya, hub_record, LanAddress("127.0.0.1", "3.4", on_the_wire.port))
+        child = Device(tuya, record(PLUG, node_id="node-1"))
+        tuya._devices = [hub, child]
+        assert tuya.gateway_of(child) is hub
+
+        child.turn_on()
+        assert on_the_wire.cids["node-1"]["1"] is True
+        assert tuya.scan() == {}  # and a device without a key does not upset a scan
+
+
+def test_a_product_fix_can_supply_the_datapoint_map(make_device):
+    """The cloud gives no map for this meter; tuya-device-handlers knows its datapoints."""
+    assert not record("cz_dhto3y4uachr1wll")["local_strategy"]
+    assert make_device("cz_dhto3y4uachr1wll").dp_map.dp_ids

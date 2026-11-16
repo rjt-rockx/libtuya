@@ -53,8 +53,8 @@ you log in. Tuya has not said whether other software may use it.
 
 ## Earlier revisions
 
-Versions before 2.0 (commits `c7b8401` and `d03c0d8`) carried material without
-its licence or any attribution: tables copied from Home Assistant Core, two
-data files reproduced from localtuya (`mode_mappings.json`, `scenes.json`,
-GPL-3.0, in a package labelled MIT) and statistics derived from tuya-local.
-All of it was removed in 2.0; it remains only in the git history.
+Revisions before 2.0 (up to commit `4384beb`) carried material without its
+licence or any attribution: tables copied from Home Assistant Core, two data
+files reproduced from localtuya (`mode_mappings.json` and `scenes.json`, added
+in `d03c0d8`; GPL-3.0, in a package labelled MIT) and statistics derived from
+tuya-local. All of it was removed in 2.0; it remains only in the git history.

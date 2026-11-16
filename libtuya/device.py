@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
@@ -12,23 +13,29 @@ from .cloud import Record, load_device
 from .dpmap import DpMap
 from .entities import Entity, apply_quirks, build_entities
 from .errors import LanError, TuyaError, Unmapped
-from .lan import UNREACHABLE, Connection, LanAddress
+from .lan import Connection, LanAddress
 
 if TYPE_CHECKING:
     from .client import Tuya
 
 # Where turn_on()/turn_off() look for the thing to switch, in order.
 _POWER_PLATFORMS = ("light", "switch", "fan", "climate", "humidifier", "siren", "valve")
+# TinyTuya errors after which a write may or may not have reached the device.
+_UNCONFIRMED = {"902", "904"}
 
 
 class Device:
     """One device of the account.
 
     `info` is the device as tuya-device-sharing-sdk models it. `status` holds
-    its state by DP code, in the cloud's terms, and is what entities read.
-    `refresh()` updates it and `send()` changes the device; both use the LAN
-    when the device is reachable there and fall back to the cloud otherwise.
-    `transport` says which one served the last call.
+    its state by DP code, in the cloud's terms, and is what entities read;
+    until the first `refresh()` it is what the cloud knew when the device list
+    was fetched. `refresh()` updates it and `send()` changes the device; both
+    use the LAN when the device is reachable there and fall back to the cloud
+    otherwise. `transport` says which one served the last call.
+
+    A write is confirmed by the device's acknowledgement only: `status` then
+    shows what was sent, and `refresh()` shows what the device made of it.
     """
 
     def __init__(self, client: Tuya, record: Record, address: LanAddress | None = None) -> None:
@@ -56,6 +63,20 @@ class Device:
         return self.info.category
 
     @property
+    def product_name(self) -> str:
+        return getattr(self.info, "product_name", None) or ""
+
+    @property
+    def local_key(self) -> str:
+        """Key for LAN traffic; empty for devices the cloud gives none for, such as some hubs."""
+        return getattr(self.info, "local_key", None) or ""
+
+    @property
+    def online(self) -> bool:
+        """Whether the cloud last reported the device as connected to it."""
+        return bool(getattr(self.info, "online", True))
+
+    @property
     def status(self) -> dict[str, Any]:
         return self.info.status
 
@@ -73,8 +94,7 @@ class Device:
         ref_lower = ref.lower()
         for matches in (
             lambda e: e.id == ref,
-            lambda e: e.key == ref,
-            lambda e: e.platform == ref,
+            lambda e: ref in (e.key, e.platform),
             lambda e: (e.name or "").lower() == ref_lower,
         ):
             found = [entity for entity in self.entities if matches(entity)]
@@ -90,18 +110,21 @@ class Device:
 
     @property
     def power(self) -> Entity:
-        """The entity that turns the device on and off."""
+        """The entity that turns the device on and off.
+
+        Raises TuyaError if there is none, or no obvious one (a fan with a
+        light, a multi-gang switch); pick one with `entity()` then.
+        """
         candidates = [
             entity
             for platform in _POWER_PLATFORMS
             for entity in self.entities
             if entity.platform == platform
-            and "switch" in entity.wrappers
+            and entity.on_off
             and "entity_category" not in entity.description
         ]
-        main = [entity for entity in candidates if entity.name is None]
-        if main:
-            return main[0]
+        # The entity that carries the device's own name is the device, if there is just one.
+        candidates = [entity for entity in candidates if entity.name is None] or candidates
         if len(candidates) == 1:
             return candidates[0]
         if candidates:
@@ -117,8 +140,10 @@ class Device:
         self.power.turn_off()
 
     def toggle(self) -> None:
-        self.refresh()
-        self.power.set(switch=not self.power.value)
+        power = self.power
+        with self.connected():
+            self.refresh()
+            power.turn_off() if power.value else power.turn_on()
 
     # -- transport --------------------------------------------------------
 
@@ -126,8 +151,10 @@ class Device:
         """Read the device's current status."""
         try:
             dps = self._over_lan(lambda connection: connection.status())
+            if not dps:
+                raise LanError(f"{self.name} answered without any status")
         except LanError as err:
-            self._client.cloud_refresh(self, reason=err)
+            self._client._cloud_refresh(self, reason=err)
             self.transport = "cloud"
         else:
             self.status.update(self.dp_map.decode(dps))
@@ -142,80 +169,159 @@ class Device:
             dps = self.dp_map.encode(commands)
             reported = self._over_lan(lambda connection: connection.set(dps))
         except (LanError, Unmapped) as err:
-            self._client.cloud_send(self, commands, reason=err)
+            if getattr(err, "code", None) in _UNCONFIRMED:
+                # Sending it again through the cloud could run it twice, which
+                # matters for one-shot commands such as "feed now".
+                raise LanError(
+                    f"{self.name} did not acknowledge the command; it may or may not have "
+                    f"been carried out ({err})",
+                    err.code,
+                ) from err
+            self._client._cloud_send(self, commands, reason=err)
             self.status.update({command["code"]: command["value"] for command in commands})
             self.transport = "cloud"
         else:
-            # Not every device echoes what it applied, so assume the write
-            # took effect and let anything it did report win.
             self.status.update(self.dp_map.decode({**dps, **reported}))
             self.transport = "lan"
 
-    def set(self, values: dict[str, Any] | None = None, /, **codes: Any) -> None:
-        """Set raw DP codes, e.g. ``device.set(switch_1=True, countdown_1=60)``.
+    def set_raw(self, values: dict[str, Any] | None = None, /, **codes: Any) -> None:
+        """Write DP codes directly, e.g. ``device.set_raw(switch_1=True, countdown_1=60)``.
 
-        Values are the cloud's unscaled ones; use entities for friendly units.
+        Values are the cloud's own, unscaled and unchecked; entities take
+        friendly units and validate.
         """
         self.send(
             [{"code": code, "value": value} for code, value in {**(values or {}), **codes}.items()]
         )
 
+    @contextmanager
+    def connected(self) -> Iterator[None]:
+        """Keep one LAN connection open for several calls in a row.
+
+        Without it every call connects anew, which is gentle on a device's
+        single connection slot but, done in quick succession, has been reported
+        to make some devices stop answering.
+        """
+        with self._connection_lock:
+            held = self._connection = self._try_connect(persist=True)
+        try:
+            yield
+        finally:
+            with self._connection_lock:
+                self._connection = None
+            if held is not None:
+                held.close()
+
     def watch(self) -> Iterator[dict[str, Any]]:
         """Yield status changes pushed by the device over the LAN, forever.
 
-        Holds a connection open, which most devices allow only one of.
+        Holds a connection open, which most devices allow only one of. Raises
+        LanError when the connection is lost; start again to resume.
         """
         self._require_map()
         connection = self._connect(persist=True)
         try:
-            for dps in connection.updates():
+            for dps, pushed in connection.updates():
                 changed = self.dp_map.decode(dps)
                 self.status.update(changed)
-                for entity in self.entities:
-                    entity.pushed(list(changed), time.monotonic_ns())
+                if pushed:  # as opposed to a status this side asked for
+                    for entity in self.entities:
+                        entity._note_push(list(changed), time.monotonic_ns())
                 if changed:
                     yield changed
         finally:
             connection.close()
 
+    def stream_url(self, kind: str = "rtsp") -> str:
+        """A short-lived URL for a camera's live stream, from the cloud.
+
+        `kind` is rtsp, hls, flv or rtmp.
+        """
+        return self._client.cloud.stream_url(self.id, kind)
+
     def _require_map(self) -> None:
         if not self.dp_map:
             raise LanError(f"the cloud gave no datapoint map for {self.name}")
 
-    def _connect(self, persist: bool = False) -> Connection:
-        """A new connection to this device, through its gateway if it is a sub-device."""
+    def _connect(self, persist: bool = False, key: str = "") -> Connection:
+        """A new connection to this device, through its gateway if it is a sub-device.
+
+        `key` stands in for a gateway that has no key of its own.
+        """
         dp_ids = self.dp_map.dp_ids
         gateway = self._client.gateway_of(self)
         if gateway is None:
-            return Connection(self.id, self.info.local_key, self.address, dp_ids, persist=persist)
-        parent = gateway._connect(persist=True) if persist else gateway._lan_connection()
-        cid = getattr(self.info, "node_id", None) or self.info.uuid
+            if not (self.local_key or key):
+                raise LanError(f"the cloud gave no local key for {self.name}")
+            return Connection(
+                self.id,
+                self.local_key or key,
+                self.address,
+                dp_ids,
+                persist=persist,
+                timeout=self._client.timeout,
+            )
+        parent = (
+            gateway._connect(persist=True, key=self.local_key)
+            if persist
+            else gateway._lan_connection(key=self.local_key)
+        )
+        cid = getattr(self.info, "node_id", None) or getattr(self.info, "uuid", None)
         return Connection(self.id, "", None, dp_ids, cid=cid, parent=parent)
 
-    def _lan_connection(self) -> Connection:
-        if self.address is None:  # a sub-device, which follows its gateway, or unreachable
-            return self._connect()
+    def _try_connect(self, persist: bool) -> Connection | None:
+        try:
+            return self._connect(persist)
+        except LanError:
+            return None
+
+    def _lan_connection(self, key: str = "") -> Connection:
         with self._connection_lock:
-            if self._connection is None:
-                self._connection = self._connect()
-            return self._connection
+            if self._connection is None and self.address is not None:
+                self._connection = self._connect(key=key)
+            # A sub-device (no address of its own) is cheap to set up each
+            # time, and that way follows its gateway to a new address.
+            return self._connection or self._connect(key=key)
 
     def _over_lan(self, call: Callable[[Connection], dict[str, Any]]) -> dict[str, Any]:
         self._require_map()
         try:
             result = call(self._lan_connection())
         except LanError as err:
-            # The device may have a new IP address: look for it once.
-            if err.code not in UNREACHABLE or not self._may_relocate:
+            # Whatever went wrong on the connection, the device may simply have
+            # a new IP address (and another device its old one): look once.
+            if err.code is None or not self._may_relocate:
                 raise
             self._may_relocate = False
-            if not self._client.relocate(self):
+            if not self._client._relocate(self):
                 raise
             result = call(self._lan_connection())
         self._may_relocate = True
         return result
 
-    def moved(self, address: LanAddress | None) -> None:
+    def _moved(self, address: LanAddress | None) -> None:
         """Record a new LAN address."""
         self.address = address
         self._connection = None
+
+    def _merge_cloud(self, current: dict[str, Any]) -> None:
+        """Take over `online` and `status` as the cloud just reported them."""
+        fresh = load_device({**self.record, **current})
+        apply_quirks(fresh)  # quirks correct some status values too
+        self.info.online = fresh.online
+        self.status.update(fresh.status)
+
+    def _apply_report(self, items: Any) -> dict[str, Any]:
+        """Apply a status report pushed through the cloud; returns what changed, by DP code."""
+        changed: dict[str, Any] = {}
+        for item in items:
+            if "value" not in item:
+                continue
+            if "dpId" in item:  # by datapoint id, raw, as on the LAN
+                changed |= self.dp_map.decode({item["dpId"]: item["value"]})
+            elif "code" in item:
+                changed[item["code"]] = item["value"]
+        self.status.update(changed)
+        for entity in self.entities:
+            entity._note_push(list(changed), time.monotonic_ns())
+        return changed

@@ -31,14 +31,22 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return json.loads(value) if isinstance(value, str) else value
 
 
+def _hsv(value: Any, limits: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Hue, saturation and value of a cloud colour, checked to fit their hex fields."""
+    colour = _as_dict(value)
+    hsv = (round(colour["h"]), round(colour["s"]), round(colour["v"]))
+    if not all(0 <= part <= limit for part, limit in zip(hsv, limits, strict=True)):
+        raise ValueError(f"colour {hsv} is out of range")
+    return hsv
+
+
 def _encode_colour_v2(value: Any, config: dict[str, Any]) -> str:
-    hsv = _as_dict(value)
-    return f"{hsv['h']:04x}{hsv['s']:04x}{hsv['v']:04x}"
+    hue, saturation, brightness = _hsv(value, (0xFFFF, 0xFFFF, 0xFFFF))
+    return f"{hue:04x}{saturation:04x}{brightness:04x}"
 
 
 def _encode_colour_v1(value: Any, config: dict[str, Any]) -> str:
-    hsv = _as_dict(value)
-    hue, saturation, brightness = round(hsv["h"]), round(hsv["s"]), round(hsv["v"])
+    hue, saturation, brightness = _hsv(value, (360, 255, 255))
     rgb = colorsys.hsv_to_rgb(hue / 360, saturation / 255, brightness / 255)
     red, green, blue = (round(channel * 255) for channel in rgb)
     return f"{red:02x}{green:02x}{blue:02x}{hue:04x}{saturation:02x}{brightness:02x}"
@@ -118,7 +126,11 @@ class DpMap:
                     f"{code!r} uses conversion {convert!r}, which is read-only on the LAN"
                 )
             try:
-                dps[str(dp_id)] = encoder(value, config)
+                raw = encoder(value, config)
             except (KeyError, TypeError, ValueError) as err:
                 raise Unmapped(f"cannot convert {code!r}={value!r} for the LAN: {err}") from err
+            if isinstance(raw, str) and " " in raw:
+                # TinyTuya strips every space from what it sends.
+                raise Unmapped(f"text with spaces ({code!r}) cannot be sent over the LAN")
+            dps[str(dp_id)] = raw
         return dps

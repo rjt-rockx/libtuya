@@ -51,7 +51,7 @@ and the name of a conversion. tuya-device-sharing-sdk calls this
 `local_strategy` and implements the conversions for reading (it needs them for
 its own push messages). `dpmap.py` uses those for LAN reads and adds the
 reverse direction for writes where an exact inverse exists: identity (about
-95% of datapoints in Home Assistant's fixtures) and the two colour encodings.
+nine in ten datapoints in Home Assistant's fixtures) and the two colour encodings.
 A command that cannot be expressed locally goes through the cloud.
 
 The SDK drops a device's whole map if a single datapoint cannot be pushed in
@@ -78,9 +78,9 @@ every Home Assistant name replaced by a placeholder; it does not need Home
 Assistant installed.
 
 `entities.py` then mirrors the dozen lines each Home Assistant platform uses
-to call the handlers. The result is checked against Home Assistant itself: for
-its 336 device fixtures, libtuya builds exactly the entities recorded in Home
-Assistant's own test snapshots.
+to call the handlers. The result is checked against Home Assistant itself: a
+test builds the entities for every device fixture in the vendored release and
+compares them, device by device, with Home Assistant's own test snapshots.
 
 The handlers version is pinned to the one the vendored Home Assistant release
 uses. The tables reference handler classes by name, and the handlers make no

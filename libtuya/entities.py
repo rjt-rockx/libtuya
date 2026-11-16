@@ -28,6 +28,9 @@ from typing import TYPE_CHECKING, Any
 
 from tuya_device_handlers import TUYA_QUIRKS_REGISTRY
 from tuya_device_handlers.device_wrapper import DeviceWrapper
+from tuya_device_handlers.device_wrapper.common import DPCodeIntegerWrapper
+from tuya_device_handlers.device_wrapper.exception import SetValueOutOfRangeError
+from tuya_device_handlers.device_wrapper.light import ColorDataWrapper, ColorTempWrapper
 from tuya_device_handlers.device_wrapper.sensor import DeltaIntegerWrapper
 from tuya_device_handlers.devices import register_tuya_quirks
 from tuya_device_handlers.helpers.homeassistant import TuyaUnitOfTemperature
@@ -40,6 +43,8 @@ if TYPE_CHECKING:
 
 _UNSET: Any = object()
 _READ_ONLY_PLATFORMS = {"binary_sensor", "event", "sensor"}
+# What the handlers call the on/off attribute: most platforms, sirens, valves.
+_ON_OFF = ("switch", "siren", "control")
 
 
 @cache
@@ -154,14 +159,31 @@ def _name(platform: str, d: dict[str, Any], names: dict[str, dict[str, str]]) ->
     return None
 
 
+def _limits(wrapper: DeviceWrapper[Any]) -> dict[str, Any]:
+    """The range of values an attribute takes, in the units its values are given in."""
+    if isinstance(wrapper, ColorTempWrapper):
+        return {"min": wrapper.min_kelvin, "max": wrapper.max_kelvin, "unit": "K"}
+    # Brightness, percentages and fan speeds are remapped from the device's own range.
+    if remap := getattr(wrapper, "_remap_helper", None):
+        return {"min": remap.target_min, "max": remap.target_max}
+    if isinstance(wrapper, DPCodeIntegerWrapper):
+        return {"min": wrapper.min_value, "max": wrapper.max_value, "step": wrapper.value_step}
+    return {}
+
+
 class Entity:
     """One controllable or readable feature of a device.
 
-    Its attributes are the handlers' wrappers: a switch has one (``switch``), a
-    light up to five (``switch``, ``brightness``, ``color_temp``, ``color_data``,
-    ``color_mode``). Values use Home Assistant's conventions: brightness 0-255,
-    colour temperature in kelvin, colour as (hue 0-360, saturation 0-100,
-    value 0-255), positions and humidity in percent.
+    An entity has named attributes: a switch has one (``switch``), a light up
+    to five (``switch``, ``brightness``, ``color_temp``, ``color_data``,
+    ``color_mode``). `describe()` lists them with their units and limits.
+    Values use Home Assistant's conventions: brightness 0-255, colour
+    temperature in kelvin, colour as (hue 0-360, saturation 0-100, value
+    0-255), positions and humidity in percent.
+
+    `name` is None for the entity that is the device itself (the light of a
+    bulb), otherwise an English label such as "Child lock". `wrappers` holds
+    the tuya-device-handlers objects behind the attributes.
     """
 
     def __init__(
@@ -201,7 +223,7 @@ class Entity:
         return code is None or code in self.device.info.function
 
     def state(self) -> dict[str, Any]:
-        """Current value of every attribute, from the device's last known status."""
+        """Value of every attribute, as of the device's last `refresh()` or write."""
         values = {}
         for attribute, wrapper in self.wrappers.items():
             if isinstance(wrapper, DeltaIntegerWrapper) and not self._pushed:
@@ -215,24 +237,46 @@ class Entity:
                 continue
         return values
 
-    def pushed(self, codes: list[str], timestamp: int) -> None:
-        """Note a report pushed by the device, for wrappers that keep a running value."""
-        self._pushed = True
-        for wrapper in self.wrappers.values():
-            wrapper.skip_update(self.device.info, codes, dict.fromkeys(codes, timestamp))
+    def describe(self) -> dict[str, dict[str, Any]]:
+        """Each attribute with its value and, where known, unit, limits and choices.
+
+        Keys per attribute: ``value``, ``writable``, and any of ``unit``,
+        ``min``, ``max``, ``step``, ``options``.
+        """
+        state = self.state()
+        described = {}
+        for attribute, wrapper in self.wrappers.items():
+            details = {"value": state.get(attribute), "writable": self.writable(attribute)}
+            if unit := getattr(wrapper, "native_unit", None):
+                details["unit"] = unit
+            details |= _limits(wrapper)
+            if options := getattr(wrapper, "options", None):
+                details["options"] = [str(option) for option in options]
+            described[attribute] = details
+        return described
+
+    @property
+    def on_off(self) -> str | None:
+        """Name of the attribute that switches the entity on and off, if it has one."""
+        return next((name for name in _ON_OFF if name in self.wrappers), None)
 
     @property
     def value(self) -> Any:
-        """The switch state if the entity has one, else its only attribute."""
+        """The on/off state if the entity has one, else its only attribute.
+
+        None for an entity with several attributes and no on/off (a cover);
+        use `state()` there.
+        """
         state = self.state()
-        if "switch" in state or len(state) != 1:
-            return state.get("switch")
+        if self.on_off or len(state) != 1:
+            return state.get(self.on_off)
         return next(iter(state.values()))
 
     def commands(self, value: Any = _UNSET, /, **attributes: Any) -> list[dict[str, Any]]:
         """Cloud commands that would apply the given attribute values.
 
-        Raises ValueError for a value outside the device's range.
+        Raises TuyaError for an unknown or read-only attribute and ValueError
+        for a value the device does not accept.
         """
         if value is not _UNSET:
             if len(self.wrappers) != 1:
@@ -249,43 +293,87 @@ class Entity:
             wrapper = self.wrappers[attribute]
             if not self.writable(attribute):
                 raise TuyaError(f"{self.id}.{attribute} is read-only")
-            # Some wrappers fail obscurely on a choice the device does not offer.
+            # The wrappers check numbers against the device's range, but not these two.
             options = getattr(wrapper, "options", None)
             if isinstance(new, str) and options and new not in options:
                 raise ValueError(f"{self.id}.{attribute} must be one of {[*map(str, options)]}")
+            if isinstance(wrapper, ColorDataWrapper):
+                hue, saturation, brightness = new
+                if not (0 <= hue <= 360 and 0 <= saturation <= 100 and 0 <= brightness <= 255):
+                    raise ValueError(
+                        f"{self.id}.{attribute} is (hue 0-360, saturation 0-100, value 0-255)"
+                    )
             try:
                 commands += wrapper.get_update_commands(self.device.info, new)
             except NotImplementedError:
                 raise TuyaError(f"{self.id}.{attribute} is read-only") from None
+            except SetValueOutOfRangeError:
+                limits = self.describe()[attribute]
+                allowed = f"{limits.get('min')} to {limits.get('max')}" if "max" in limits else ""
+                raise ValueError(
+                    f"{self.id}.{attribute}={new!r} is out of range {allowed}".rstrip()
+                ) from None
+            except Exception as err:
+                # The wrappers assume a value of the right type and fail in
+                # assorted ways (TypeError, StopIteration, ...) on any other.
+                raise ValueError(f"{self.id}.{attribute} does not accept {new!r}") from err
         return commands
 
     def set(self, value: Any = _UNSET, /, **attributes: Any) -> None:
-        """Set attributes: ``switch.set(True)`` or ``light.set(switch=True, brightness=128)``."""
+        """Set attributes: ``switch.set(True)`` or ``cover.set(set_position=40)``.
+
+        Each attribute is written as given; nothing else is changed to make it
+        take effect (see `Light.turn_on` for lights).
+        """
         self.device.send(self.commands(value, **attributes))
 
     def turn_on(self) -> None:
-        self.set(switch=True)
+        self._switch(True)
 
     def turn_off(self) -> None:
-        self.set(switch=False)
+        self._switch(False)
+
+    def _switch(self, on: bool) -> None:
+        if self.on_off is None:
+            raise TuyaError(f"{self.id} cannot be switched on or off")
+        self.set(**{self.on_off: on})
+
+    def _note_push(self, codes: list[str], timestamp: int) -> None:
+        """Tell wrappers that keep a running value about a report pushed by the device."""
+        self._pushed = True
+        for wrapper in self.wrappers.values():
+            wrapper.skip_update(self.device.info, codes, dict.fromkeys(codes, timestamp))
 
 
 class Light(Entity):
-    """A light, with the mode switching colour and white changes need."""
+    """A light.
+
+    `turn_on` is the way to change brightness, white temperature or colour: it
+    also switches the light between its white and colour modes as needed,
+    which setting a single attribute with `set` does not.
+    """
 
     @property
     def in_color_mode(self) -> bool:
         """Whether the light currently shows a colour rather than white."""
         if "color_data" not in self.wrappers:
             return False
-        if "brightness" not in self.wrappers and "color_temp" not in self.wrappers:
-            return True
         mode = self.wrappers.get("color_mode")
+        has_white = (
+            "brightness" in self.wrappers
+            or "color_temp" in self.wrappers
+            or (mode is not None and "white" in mode.options)
+        )
+        if not has_white:
+            return True
         return mode is not None and mode.read_device_status(self.device.info) != "white"
 
     @property
     def brightness(self) -> int | None:
-        """Current brightness, 0-255, in whichever mode the light is in."""
+        """Current brightness, 0-255, of whichever mode the light is in.
+
+        `state()["brightness"]` is the white channel's setting alone.
+        """
         info = self.device.info
         if self.in_color_mode:
             hsv = self.wrappers["color_data"].read_device_status(info)
@@ -301,31 +389,43 @@ class Light(Entity):
         kelvin: int | None = None,
         hs: tuple[float, float] | None = None,
     ) -> None:
-        """Turn on, optionally setting brightness (0-255), white temperature or colour."""
-        wrappers, info = self.wrappers, self.device.info
-        commands = wrappers["switch"].get_update_commands(info, True)
-        mode = wrappers.get("color_mode")
+        """Turn on, optionally setting brightness (0-255), white temperature or colour.
 
-        if kelvin is not None and "color_temp" in wrappers:
-            if mode:
-                commands += mode.get_update_commands(info, "white")
-            commands += wrappers["color_temp"].get_update_commands(info, kelvin)
+        Raises TuyaError if the light lacks what is asked for, and ValueError
+        for values out of range.
+        """
+        lacking = [
+            what
+            for what, asked, needs in (
+                ("colour", hs, {"color_data"}),
+                ("colour temperature", kelvin, {"color_temp"}),
+                ("brightness", brightness, {"brightness", "color_data"}),
+            )
+            if asked is not None and not needs & self.wrappers.keys()
+        ]
+        if lacking:
+            raise TuyaError(f"{self.device.name} has no adjustable {' or '.join(lacking)}")
 
-        colour = wrappers.get("color_data")
-        if colour and (
-            hs is not None or (brightness is not None and kelvin is None and self.in_color_mode)
-        ):
-            if mode:
-                commands += mode.get_update_commands(info, "colour")
+        setting: dict[str, Any] = {"switch": True}
+        if kelvin is not None:
+            setting |= {"color_mode": "white", "color_temp": kelvin}
+        colour = self.wrappers.get("color_data")
+        # Brightness belongs to the colour while one is showing, and on lights
+        # that have no separate white channel.
+        dims_colour = kelvin is None and (self.in_color_mode or "brightness" not in self.wrappers)
+        if colour and (hs is not None or (brightness is not None and dims_colour)):
             if hs is None:
-                hs = (colour.read_device_status(info) or (0.0, 0.0, 0.0))[:2]
+                hs = (colour.read_device_status(self.device.info) or (0.0, 0.0, 0.0))[:2]
             if brightness is None:
                 brightness = self.brightness or 255
-            commands += colour.get_update_commands(info, (*hs, brightness))
-        elif brightness is not None and "brightness" in wrappers:
-            commands += wrappers["brightness"].get_update_commands(info, brightness)
-
-        self.device.send(commands)
+            setting |= {"color_mode": "colour", "color_data": (*hs, brightness)}
+        elif brightness is not None:
+            setting["brightness"] = brightness
+        # Lights without a mode datapoint, or without that mode, follow the last value written.
+        mode = self.wrappers.get("color_mode")
+        if mode is None or setting.get("color_mode") not in mode.options:
+            setting.pop("color_mode", None)
+        self.device.send(self.commands(**setting))
 
 
 def apply_quirks(info: CustomerDevice) -> None:
