@@ -1,105 +1,63 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
 
-## Development Commands
+## What this is
 
-### Installation and Setup
+libtuya controls Tuya (Smart Life) devices from Python over the LAN, with no
+Tuya developer account and no Home Assistant. It is a library first; the `tuya`
+command is a thin front end to it.
+
+It is deliberately glue between three upstream projects, and should stay that
+way: prefer using or updating an upstream dependency over writing device
+knowledge or protocol code here.
+
+| Need | Comes from |
+|---|---|
+| QR login, device list, local keys, datapoint maps | `tuya-device-sharing-sdk` |
+| What a device's datapoints mean and how values scale | Home Assistant's Tuya tables (vendored, generated into `libtuya/data/ha_tuya.json`) and `tuya-device-handlers` |
+| LAN discovery and protocol | `tinytuya` |
+
+Read `docs/architecture.md` before changing how the layers fit.
+
+## Commands
 
 ```bash
-# Install in development mode
 pip install -e ".[dev]"
-
-# Install just the library
-pip install -e .
+pytest                                  # about a second; no network or hardware needed
+ruff check . && ruff format --check .   # line length 100
+scripts/sync-upstream.sh <ha-release>   # refresh third_party/ and the generated data
+python scripts/gen_ha_tables.py         # regenerate the data only
 ```
 
-### Code Quality
+Python 3.13+ (required by `tuya-device-handlers`).
 
-```bash
-# Format code (line length: 100)
-black libtuya/
+## Layout
 
-# Lint code (max line length: 200, relaxed rules)
-flake8 libtuya/
+- `libtuya/client.py` — `Tuya`: saved login, saved device list, lookups, LAN scans. Only module that touches disk.
+- `libtuya/cloud.py` — all traffic to Tuya's servers; device records for the cache.
+- `libtuya/lan.py` — discovery and `Connection` (one TinyTuya session, locked, errors as exceptions).
+- `libtuya/dpmap.py` — LAN datapoints (`{"20": true}`) to and from cloud codes (`{"switch_led": true}`).
+- `libtuya/device.py` — `Device`: status, LAN-first transport with cloud fallback, entities.
+- `libtuya/entities.py` — `Entity`, `Light`: Home Assistant's view of a device.
+- `libtuya/cli.py` — the `tuya` command, using only the public API.
+- `scripts/` — upstream sync and the table generator.
+- `third_party/home-assistant-core/` — unmodified upstream snapshot. Never edit; see `third_party/README.md`.
+- `tests/` — `fake_device.py` is a TCP server speaking the real LAN protocol; devices come from Home Assistant's fixtures.
 
-# Type checking (lenient configuration)
-mypy libtuya/
-```
+## Rules of the road
 
-### CLI Usage
+- **Everything above `device.py` speaks cloud terms** (DP codes, cloud-format values). Only `dpmap.py` and `lan.py` know datapoint ids and raw values.
+- **Do not guess datapoint ids or invent device tables.** If the cloud gives no map for a device, it is controlled through the cloud.
+- **`libtuya/data/ha_tuya.json` is generated.** Change `scripts/gen_ha_tables.py` or re-sync; a test fails if the file and the vendored source disagree.
+- **The handlers and SDK pins in `pyproject.toml` follow the vendored Home Assistant release's `manifest.json`.** The generated tables reference handler classes by name.
+- **Licensing.** libtuya is MIT; data derived from Home Assistant is Apache-2.0. localtuya and hass-localtuya are GPL-3.0: do not copy code or data from them. Record anything taken from elsewhere in `NOTICE.md`.
+- **Never raise TinyTuya's log level to DEBUG**: it logs local keys and weakens protocol 3.5 encryption.
+- **The library does not print or prompt.** Errors are `TuyaError` subclasses; interaction lives in `cli.py`.
+- **Tests** go through the real TinyTuya client against `FakeTuyaDevice`, or use real device dumps. Prefer one test of real behaviour over several of mocks.
 
-```bash
-# The library provides a CLI tool accessible via 'tuya' command
-tuya login                  # QR code authentication
-tuya devices               # List discovered devices
-tuya control "device" on   # Control devices
-tuya info "device"         # Device information
-tuya health               # System health check
-```
+## What cannot be tested here
 
-## Architecture Overview
-
-libtuya is a Python library that combines three key components for Tuya device control:
-
-1. **Authentication System** (`libtuya/auth/`): QR code authentication using tuya-device-sharing-sdk
-2. **Device Intelligence** (`libtuya/intelligence/`): Device capability mapping from Home Assistant
-3. **Local Control** (`libtuya/devices/`): Fast local control using TinyTuya
-
-### Core Architecture
-
-**Authentication Flow:**
-
-- `TuyaAuthenticator` in `auth/__init__.py` provides the main interface
-- `QRAuthenticator` in `auth/qr_auth.py` handles QR code authentication
-- `CloudDeviceManager` in `auth/manager.py` manages device discovery
-- Thread-safe design with atomic operations and proper locking
-
-**Device System:**
-
-- `IntelligentDeviceRegistry` in `devices/__init__.py` is the main device manager
-- `DeviceFactory` in `devices/factory.py` creates appropriate TinyTuya instances
-- `IntelligentDevice` in `devices/intelligent_device.py` wraps TinyTuya with intelligence
-- Specialized device types: `IntelligentLight`, `IntelligentSwitch`, etc. in `device_types.py`
-
-**Intelligence Layer:**
-
-- `DeviceIntelligence` provides device capability mapping
-- JSON data files in `intelligence/data/` contain device mappings, quirks, and scaling rules
-- DPS (Data Point) mapping system in `dps/` translates between cloud and local protocols
-
-**CLI System:**
-
-- Thin CLI wrapper in `cli.py` delegates to `cli_core/`
-- `TuyaCLICore` handles business logic
-- `CommandHandler` processes user commands
-
-### Key Patterns
-
-**Multi-Entity Devices:**
-The system handles devices that appear as single hardware but expose multiple entities (e.g., a wall switch with multiple outlets). The `IntelligentDeviceRegistry.create_devices()` method creates separate device instances for each entity while sharing the underlying TinyTuya connection.
-
-**Thread Safety:**
-The authentication system uses `ThreadSafeMixin` with read/write locks and `AtomicFlag` for safe concurrent access.
-
-**Error Recovery:**
-The `recovery/` module provides retry strategies, error handlers, and diagnostics for robust operation.
-
-## Configuration Notes
-
-- **Black**: 100 character line length, Python 3.8+ target
-- **Flake8**: 200 character max line length with extended ignore list for flexibility
-- **MyPy**: Lenient configuration with most error checking disabled for development ease
-- **Python**: Supports 3.8+ with async/await patterns throughout
-
-## Development Workflow
-
-When adding new device support:
-
-1. Add device mappings to `intelligence/data/device_mappings.json`
-2. Update DPS codes in `intelligence/data/dpcodes.json`
-3. Add quirks if needed in `intelligence/data/quirks.json`
-4. Create specialized device type in `devices/device_types.py` if appropriate
-5. Update factory in `devices/factory.py` to recognize the new device
-
-The library follows a "just works" philosophy - minimal configuration should be required from users.
+The cloud (login, device listing, cloud commands) and physical devices. Cloud
+code is exercised with the SDK's network layer replaced; say so when a change
+depends on live behaviour.
