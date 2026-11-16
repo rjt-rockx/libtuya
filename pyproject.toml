@@ -1,3 +1,61 @@
-[tool.black]
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "libtuya"
+version = "2.0.0"
+description = "Control Tuya devices locally from Python: Smart Life QR login, Home Assistant's device knowledge, TinyTuya on the LAN"
+readme = "README.md"
+license = "MIT AND Apache-2.0"
+license-files = ["LICENSE", "NOTICE.md", "third_party/home-assistant-core/LICENSE.md"]
+# tuya-device-handlers needs 3.13 (type parameter defaults).
+requires-python = ">=3.13"
+keywords = ["tuya", "smart life", "home automation", "iot", "local control", "tinytuya"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Home Automation",
+    "Typing :: Typed",
+]
+dependencies = [
+    "tinytuya>=1.21.1",
+    # These two are pinned to what the vendored Home Assistant release uses
+    # (third_party/home-assistant-core/.../manifest.json): the generated tables
+    # in libtuya/data only match that version of the handlers.
+    "tuya-device-handlers==0.0.34",
+    "tuya-device-sharing-sdk==0.2.15",
+    # Imported by tuya-device-sharing-sdk, which does not declare it.
+    "cryptography",
+    "qrcode>=7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[project.scripts]
+tuya = "libtuya.cli:main"
+
+[project.urls]
+Source = "https://github.com/rjt-rockx/libtuya"
+Issues = "https://github.com/rjt-rockx/libtuya/issues"
+
+[tool.setuptools]
+packages = ["libtuya"]
+
+[tool.setuptools.package-data]
+libtuya = ["data/*.json", "py.typed"]
+
+[tool.ruff]
 line-length = 100
-target-version = ['py38']
+extend-exclude = ["third_party"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
