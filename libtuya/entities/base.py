@@ -1,4 +1,4 @@
-"""Entities: the lights, switches, sensors ... that make up a device.
+"""The generic entity, and how a device's entities are found.
 
 A Tuya device is a bag of datapoints. Which of them form "a light with
 brightness and colour" depends on the device category, and how their values
@@ -11,9 +11,6 @@ are scaled depends on the product. Home Assistant has worked both out:
 
 This module joins the two, so a device here has the same entities, with the
 same values, as it would in Home Assistant.
-
-``Light.turn_on`` follows ``TuyaLightEntity.async_turn_on`` in Home Assistant's
-``homeassistant/components/tuya/light.py`` (Apache-2.0).
 """
 
 from __future__ import annotations
@@ -36,10 +33,10 @@ from tuya_device_handlers.devices import register_tuya_quirks
 from tuya_device_handlers.helpers.homeassistant import TuyaUnitOfTemperature
 from tuya_sharing import CustomerDevice
 
-from .errors import TuyaError
+from ..errors import TuyaError
 
 if TYPE_CHECKING:
-    from .device import Device
+    from ..device import Device
 
 _UNSET: Any = object()
 _READ_ONLY_PLATFORMS = {"binary_sensor", "event", "sensor"}
@@ -237,6 +234,15 @@ class Entity:
                 continue
         return values
 
+    def summary(self) -> dict[str, Any]:
+        """What Home Assistant would show for this entity: its ``state`` and attributes.
+
+        The classes for each kind of entity use Home Assistant's own names and
+        values here ("on", ``brightness``, ``current_temperature`` ...). This
+        generic one only knows the entity's `value`.
+        """
+        return {"state": self.value}
+
     def describe(self) -> dict[str, dict[str, Any]]:
         """Each attribute with its value and, where known, unit, limits and choices.
 
@@ -345,89 +351,6 @@ class Entity:
             wrapper.skip_update(self.device.info, codes, dict.fromkeys(codes, timestamp))
 
 
-class Light(Entity):
-    """A light.
-
-    `turn_on` is the way to change brightness, white temperature or colour: it
-    also switches the light between its white and colour modes as needed,
-    which setting a single attribute with `set` does not.
-    """
-
-    @property
-    def in_color_mode(self) -> bool:
-        """Whether the light currently shows a colour rather than white."""
-        if "color_data" not in self.wrappers:
-            return False
-        mode = self.wrappers.get("color_mode")
-        has_white = (
-            "brightness" in self.wrappers
-            or "color_temp" in self.wrappers
-            or (mode is not None and "white" in mode.options)
-        )
-        if not has_white:
-            return True
-        return mode is not None and mode.read_device_status(self.device.info) != "white"
-
-    @property
-    def brightness(self) -> int | None:
-        """Current brightness, 0-255, of whichever mode the light is in.
-
-        `state()["brightness"]` is the white channel's setting alone.
-        """
-        info = self.device.info
-        if self.in_color_mode:
-            hsv = self.wrappers["color_data"].read_device_status(info)
-            return None if hsv is None else round(hsv[2])
-        if "brightness" in self.wrappers:
-            return self.wrappers["brightness"].read_device_status(info)
-        return None
-
-    def turn_on(
-        self,
-        *,
-        brightness: float | None = None,
-        kelvin: int | None = None,
-        hs: tuple[float, float] | None = None,
-    ) -> None:
-        """Turn on, optionally setting brightness (0-255), white temperature or colour.
-
-        Raises TuyaError if the light lacks what is asked for, and ValueError
-        for values out of range.
-        """
-        lacking = [
-            what
-            for what, asked, needs in (
-                ("colour", hs, {"color_data"}),
-                ("colour temperature", kelvin, {"color_temp"}),
-                ("brightness", brightness, {"brightness", "color_data"}),
-            )
-            if asked is not None and not needs & self.wrappers.keys()
-        ]
-        if lacking:
-            raise TuyaError(f"{self.device.name} has no adjustable {' or '.join(lacking)}")
-
-        setting: dict[str, Any] = {"switch": True}
-        if kelvin is not None:
-            setting |= {"color_mode": "white", "color_temp": kelvin}
-        colour = self.wrappers.get("color_data")
-        # Brightness belongs to the colour while one is showing, and on lights
-        # that have no separate white channel.
-        dims_colour = kelvin is None and (self.in_color_mode or "brightness" not in self.wrappers)
-        if colour and (hs is not None or (brightness is not None and dims_colour)):
-            if hs is None:
-                hs = (colour.read_device_status(self.device.info) or (0.0, 0.0, 0.0))[:2]
-            if brightness is None:
-                brightness = self.brightness or 255
-            setting |= {"color_mode": "colour", "color_data": (*hs, brightness)}
-        elif brightness is not None:
-            setting["brightness"] = brightness
-        # Lights without a mode datapoint, or without that mode, follow the last value written.
-        mode = self.wrappers.get("color_mode")
-        if mode is None or setting.get("color_mode") not in mode.options:
-            setting.pop("color_mode", None)
-        self.device.send(self.commands(**setting))
-
-
 def apply_quirks(info: CustomerDevice) -> None:
     """Patch a device the cloud describes wrongly. Call once per device."""
     _tables()
@@ -440,15 +363,3 @@ def definitions(info: CustomerDevice) -> Iterator[tuple[str, dict[str, Any], Any
         for description in categories.get(info.category, ()):
             if definition := _definition(platform, info, description):
                 yield platform, description, definition
-
-
-def build_entities(device: Device) -> list[Entity]:
-    """Create a device's entities, leaving out those with nothing to read or write."""
-    names = _tables()["names"]
-    entities = [
-        (Light if platform == "light" else Entity)(
-            device, platform, description, _name(platform, description, names), definition
-        )
-        for platform, description, definition in definitions(device.info)
-    ]
-    return [entity for entity in entities if entity.wrappers]

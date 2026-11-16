@@ -45,7 +45,7 @@ Source = "https://github.com/rjt-rockx/libtuya"
 Issues = "https://github.com/rjt-rockx/libtuya/issues"
 
 [tool.setuptools]
-packages = ["libtuya"]
+packages = ["libtuya", "libtuya.entities"]
 
 [tool.setuptools.package-data]
 libtuya = ["data/*.json", "py.typed"]
