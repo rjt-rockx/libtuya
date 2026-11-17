@@ -1,42 +1,74 @@
-"""
-libtuya - A unified Python library for Tuya device control.
+"""libtuya: control Tuya devices from Python, locally, without Home Assistant.
 
-This library provides a "just works" Tuya integration system that combines
-the authentication capabilities of tuya-device-sharing-sdk, the device intelligence
-of Home Assistant's Tuya integration, and the fast local control of TinyTuya.
+    from libtuya import Light, Tuya
 
-Key Features:
-- QR code authentication with Smart Life app
-- Automatic device discovery with local keys
-- Intelligent device control with proper scaling
-- Multiple interfaces (Python API, CLI, REST API)
-- No manual configuration required
+    tuya = Tuya()                       # uses the saved login
+    lamp = tuya.device("Living room")
+    lamp.entity("light", Light).turn_on(brightness=128, color_temp_kelvin=3000)
 
-Quick Start:
-    from libtuya import TuyaAuthenticator
-
-    # Authenticate with QR code
-    auth = TuyaAuthenticator()
-    session = auth.authenticate_with_qr()
-
-    # Discover devices
-    devices = auth.get_devices_with_keys()
-
-    # Control devices
-    for device in devices:
-        if device.category == "dj":  # Light
-            auth.send_command(device.id, [
-                {"code": "switch_1", "value": True},
-                {"code": "bright_value", "value": 800}
-            ])
+See the README for the full picture.
 """
 
-from .auth import TuyaAuthenticator
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = "0.1.0"
-__author__ = "libtuya"
-__email__ = "contact@libtuya.dev"
-__description__ = "A unified Python library for Tuya device control"
+from .client import Tuya
+from .cloud import Scene
+from .device import Device
+from .entities import (
+    AlarmControlPanel,
+    BinarySensor,
+    Button,
+    Camera,
+    Climate,
+    Cover,
+    Entity,
+    Event,
+    Fan,
+    Humidifier,
+    Light,
+    Number,
+    Select,
+    Sensor,
+    Siren,
+    Switch,
+    Vacuum,
+    Valve,
+)
+from .errors import CloudError, DeviceNotFound, LanError, NotLoggedIn, TuyaError, Unmapped
+from .lan import LanAddress
 
-# Export main classes
-__all__ = ["TuyaAuthenticator"]
+try:
+    __version__ = version("libtuya")
+except PackageNotFoundError:  # running from a source tree that is not installed
+    __version__ = "0+unknown"
+
+__all__ = [
+    "AlarmControlPanel",
+    "BinarySensor",
+    "Button",
+    "Camera",
+    "Climate",
+    "CloudError",
+    "Cover",
+    "Device",
+    "DeviceNotFound",
+    "Entity",
+    "Event",
+    "Fan",
+    "Humidifier",
+    "LanAddress",
+    "LanError",
+    "Light",
+    "NotLoggedIn",
+    "Number",
+    "Scene",
+    "Select",
+    "Sensor",
+    "Siren",
+    "Switch",
+    "Tuya",
+    "TuyaError",
+    "Unmapped",
+    "Vacuum",
+    "Valve",
+]
