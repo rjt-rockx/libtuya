@@ -61,8 +61,8 @@ select = ["E", "F", "I", "UP", "B"]
 files = ["libtuya"]
 
 [[tool.mypy.overrides]]
-# Neither ships type information.
-module = ["tinytuya", "tinytuya.*", "tuya_sharing", "tuya_sharing.*"]
+# None of these ships type information.
+module = ["qrcode", "qrcode.*", "tinytuya", "tinytuya.*", "tuya_sharing", "tuya_sharing.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
