@@ -48,10 +48,14 @@ Concretely, compared with using the pieces yourself:
   exists (plain values and two colour encodings), which none of the upstream
   libraries do; the cloud normally does it server-side. Other writes go
   through the cloud.
-- **The entities are Home Assistant's.** A test checks that for every device
-  fixture in the vendored Home Assistant release (329 real devices), libtuya
-  derives the same entities, by unique id, as Home Assistant's own test
-  snapshots. The few with nothing to read or write are then left out.
+- **The entities are Home Assistant's, and so is their behaviour.** A test
+  checks that for every device fixture in the vendored Home Assistant release
+  (329 real devices), libtuya derives the same entities, by unique id, as Home
+  Assistant's own test snapshots. Each kind of entity has a class that
+  follows Home Assistant's (`Light.turn_on(brightness=, color_temp_kelvin=)`,
+  `Climate.set_hvac_mode`, `Cover.open`, `Fan.set_percentage` ...), and a
+  second test compares what each class shows with the state Home Assistant
+  recorded for every one of those entities.
 - **Both paths in one place.** Devices that never answer on the LAN
   (battery-powered, Bluetooth-only) are still controlled, through the cloud.
   The LAN-only integrations cannot reach them.
@@ -75,10 +79,6 @@ Concretely, compared with using the pieces yourself:
   connects per call; `watch()` is a plain loop.
 - **localtuya and hass-localtuya match replies to requests.** TinyTuya does
   not, so libtuya serialises calls and treats every reply as a partial update.
-- **Home Assistant's entity classes have more behaviour.** libtuya composes
-  commands for lights; for climate, fans and covers it exposes the individual
-  attributes (`hvac_mode`, `set_temperature`, `instruction`, `set_position`,
-  ...) and leaves combining them to you.
 - **Infrared and RF remotes** work in tuya-local, hass-localtuya and TinyTuya,
   and not here (nor in Home Assistant's `tuya`).
 - **The login is borrowed.** The QR login uses the client id Tuya issued to
