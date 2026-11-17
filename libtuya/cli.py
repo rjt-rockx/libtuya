@@ -155,8 +155,15 @@ def logout(tuya: Tuya, args: argparse.Namespace) -> Result:
 
 def devices(tuya: Tuya, args: argparse.Namespace) -> Result:
     found = tuya.devices(refresh=args.refresh)
+    missing = {device.id: device.record.get("incomplete") or [] for device in found}
     rows = [
-        (str(index), device.name, device.product_name, device.category, _where(tuya, device))
+        (
+            str(index),
+            device.name + (" *" if missing[device.id] else ""),
+            device.product_name,
+            device.category,
+            _where(tuya, device),
+        )
         for index, device in enumerate(found, 1)
     ]
     header = ("#", "Name", "Product", "Cat.", "LAN")
@@ -165,7 +172,15 @@ def devices(tuya: Tuya, args: argparse.Namespace) -> Result:
         "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip()
         for row in [header, *rows]
     ]
-    data = [_device_data(device) | {"index": index} for index, device in enumerate(found, 1)]
+    if any(missing.values()):
+        lines.append(
+            "* not fully described by the Tuya cloud at the last refresh; "
+            "try `tuya devices --refresh` again later"
+        )
+    data = [
+        _device_data(device) | {"index": index, "incomplete": missing[device.id]}
+        for index, device in enumerate(found, 1)
+    ]
     return {"devices": data, "count": len(data)}, "\n".join(lines)
 
 

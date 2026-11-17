@@ -11,14 +11,18 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 import requests
+import tuya_sharing.customerapi
+import tuya_sharing.user
 from tuya_sharing import (
     CustomerDevice,
     DeviceFunction,
@@ -45,6 +49,10 @@ REPORT = 4
 _LOGGER = logging.getLogger(__name__)
 # At DEBUG the SDK logs every decrypted response, tokens and local keys included.
 logging.getLogger("tuya_sharing").setLevel(logging.WARNING)
+# Seconds to connect and to wait for an answer. The SDK allows 60 for each, read at call
+# time; urllib3 tries a host's next address only once connecting has timed out, so a
+# dead IPv6 route cost a minute per request.
+tuya_sharing.customerapi.DEFAULT_TIMEOUT = tuya_sharing.user.DEFAULT_TIMEOUT = (5, 30)
 
 Session = dict[str, Any]
 # A device as stored in the cache: the cloud's fields in JSON form.
@@ -66,18 +74,25 @@ class Scene:
 _STALE_LOGIN = {"1010", "1011", "1012"}
 
 
+def _stale(err: ApiRequestException) -> bool:
+    return "sign invalid" in str(err.error_message) or str(err.error_code) in _STALE_LOGIN
+
+
 @contextmanager
 def _errors(action: str) -> Iterator[None]:
     try:
         yield
     except ApiRequestException as err:
         message = f"{action}: {err.error_message} ({err.error_code})"
-        if "sign invalid" in str(err.error_message) or str(err.error_code) in _STALE_LOGIN:
+        if _stale(err):
             raise NotLoggedIn(f"{message}; the saved login is no longer valid") from err
         raise CloudError(message) from err
     except requests.RequestException as err:
-        # Not the exception's own text: it quotes the URL, user code included.
-        raise CloudError(f"{action}: cannot reach the Tuya cloud ({type(err).__name__})") from err
+        # The host only: the URL and the exception's own text hold the user code.
+        url = err.request.url if err.request is not None else None
+        host = urlsplit(url).hostname if url else None
+        reason = type(err).__name__
+        raise CloudError(f"{action}: cannot reach {host or 'the Tuya cloud'} ({reason})") from err
     except TuyaSDKException as err:
         raise CloudError(f"{action}: {err}") from err
     except (AttributeError, KeyError, TypeError) as err:
@@ -94,9 +109,11 @@ class QrLogin:
 
     def __init__(self, user_code: str, client_id: str = CLIENT_ID, schema: str = SCHEMA) -> None:
         self._control = LoginControl()
-        self._user_code, self._client_id = user_code, client_id
+        self._user_code, self._client_id = user_code.strip(), client_id
+        # The SDK pastes the user code into the URL as it is.
+        self._quoted = quote(self._user_code, safe="")
         with _errors("login"):
-            response = self._control.qr_code(client_id, schema, user_code)
+            response = self._control.qr_code(client_id, schema, self._quoted)
             if not response.get("success"):
                 raise CloudError(
                     f"login refused: {response.get('msg', 'unknown error')} "
@@ -109,7 +126,7 @@ class QrLogin:
         """The session once approved; until then None and what the cloud answered."""
         with _errors("login"):
             authorised, info = self._control.login_result(
-                self._token, self._client_id, self._user_code
+                self._token, self._client_id, self._quoted
             )
             if not authorised:
                 return None, f"{info.get('msg', 'no reason given')} (code {info.get('code')})"
@@ -157,6 +174,23 @@ def _retrying(get: Callable[..., Any]) -> Callable[..., Any]:
     return get_with_retries
 
 
+def _locked(lock: threading.RLock, request: Callable[..., Any]) -> Callable[..., Any]:
+    def locked_request(*args: Any, **kwargs: Any) -> Any:
+        with lock:
+            return request(*args, **kwargs)
+
+    return locked_request
+
+
+# The SDK's steps for describing each device of a listing, and what each fetches.
+# It gives up on the whole listing when one of them fails for one device.
+_DESCRIBE_STEPS = {
+    "update_device_specification": "specification",
+    "update_device_strategy_info": "datapoint map",
+    "update_device_report_type": "report types",
+}
+
+
 class Cloud:
     """A logged-in account."""
 
@@ -169,11 +203,30 @@ class Cloud:
             session["token_info"],
             _TokenListener(session, save),
         )
-        self._manager.customer_api.get = _retrying(self._manager.customer_api.get)
+        # One request at a time. The SDK renews the token behind a plain flag, so a
+        # request made meanwhile by another thread went out with the old token and was
+        # refused (tuya-device-sharing-sdk PR #82). Its MQTT thread uses these same
+        # attributes. Re-entrant: the renewal is a GET made from inside a request.
+        api = self._manager.customer_api
+        lock = threading.RLock()
+        api.get = _locked(lock, _retrying(api.get))
+        api.post = _locked(lock, api.post)
+        api.put = _locked(lock, api.put)
+        api.delete = _locked(lock, api.delete)
+        # Device id -> what the cloud did not give for it in the current listing.
+        self._incomplete: dict[str, list[str]] = {}
+        repository = self._manager.device_repository
+        for step, fetches in _DESCRIBE_STEPS.items():
+            setattr(repository, step, self._tolerant(fetches, getattr(repository, step)))
 
     def devices(self) -> list[Record]:
-        """Fetch every device of the account, with specs and datapoint maps."""
+        """Fetch every device of the account, with specs and datapoint maps.
+
+        A device the cloud fails to describe is still listed, with what failed
+        under ``incomplete`` in its record.
+        """
         with _errors("listing devices"):
+            self._incomplete.clear()
             self._manager.update_device_cache()
             return [self._record(device) for device in self._manager.device_map.values()]
 
@@ -254,6 +307,31 @@ class Cloud:
             if not response:  # what the SDK returns for an HTTP error
                 raise CloudError("sending command: the Tuya cloud answered with an error")
 
+    def _tolerant(
+        self, fetches: str, describe: Callable[[CustomerDevice], None]
+    ) -> Callable[[CustomerDevice], None]:
+        """One of the SDK's description steps, made to fail for its device only."""
+
+        def describe_or_note(device: CustomerDevice) -> None:
+            try:
+                describe(device)
+            except ApiRequestException as err:
+                if _stale(err):  # the login's problem, not the device's
+                    raise
+                self._note(device, fetches, f"{err.error_message} ({err.error_code})")
+            except (AttributeError, KeyError, TypeError) as err:
+                # AttributeError: what the SDK makes of an HTTP error (it returns None).
+                self._note(device, fetches, f"unexpected response ({type(err).__name__})")
+
+        return describe_or_note
+
+    def _note(self, device: CustomerDevice, missing: str, reason: str) -> None:
+        # _record reads the datapoint map itself when the SDK could not, and warns if that fails.
+        level = logging.DEBUG if missing == "datapoint map" else logging.WARNING
+        message = "%s: the Tuya cloud did not give its %s: %s"
+        _LOGGER.log(level, message, device.name, missing, reason)
+        self._incomplete.setdefault(device.id, []).append(missing)
+
     def _record(self, device: CustomerDevice) -> Record:
         record = dict(vars(device))
         record["function"] = {code: dict(vars(item)) for code, item in device.function.items()}
@@ -267,6 +345,11 @@ class Cloud:
                     record["local_strategy"] = self._local_strategy(device)
             except CloudError as err:  # the device then works through the cloud only
                 _LOGGER.warning("%s: %s", device.name, err)
+        missing = self._incomplete.get(device.id, [])
+        if record["local_strategy"]:  # read above where the SDK's own reading failed
+            missing = [what for what in missing if what != "datapoint map"]
+        if missing:
+            record["incomplete"] = missing
         return record
 
     def _local_strategy(self, device: CustomerDevice) -> dict[int, dict[str, Any]]:
@@ -282,19 +365,24 @@ class Cloud:
         known = device.function.keys() | device.status_range.keys()
         strategy = {}
         for relation in result.get("dpStatusRelationDTOS") or ():
-            codes = {relation["statusCode"], *json.loads(relation["statusFormat"])}
-            if relation.get("supportLocal") and codes & known:
-                strategy[relation["dpId"]] = {
-                    "value_convert": relation["valueConvert"],
-                    "status_code": relation["statusCode"],
-                    "config_item": {
-                        "statusFormat": relation["statusFormat"],
-                        "valueDesc": relation["valueDesc"],
-                        "valueType": relation["valueType"],
-                        "enumMappingMap": relation["enumMappingMap"],
-                        "pid": result.get("productKey"),
-                    },
-                }
+            if not relation.get("supportLocal") or "dpId" not in relation:
+                continue
+            try:  # one malformed relation costs its datapoint only
+                codes = {relation["statusCode"], *json.loads(relation["statusFormat"])}
+                if codes & known:
+                    strategy[relation["dpId"]] = {
+                        "value_convert": relation["valueConvert"],
+                        "status_code": relation["statusCode"],
+                        "config_item": {
+                            "statusFormat": relation["statusFormat"],
+                            "valueDesc": relation["valueDesc"],
+                            "valueType": relation["valueType"],
+                            "enumMappingMap": relation["enumMappingMap"],
+                            "pid": result.get("productKey"),
+                        },
+                    }
+            except (KeyError, TypeError, ValueError) as err:
+                _LOGGER.debug("%s: skipping dp %s: %r", device.name, relation["dpId"], err)
         return strategy
 
 

@@ -22,6 +22,24 @@ def test_decode_names_and_converts_raw_datapoints():
     }
 
 
+def test_values_the_device_did_not_report_are_not_made_up():
+    """The SDK reads these as the first value of the range (tuya-device-sharing-sdk#86)."""
+
+    def datapoint(code: str, convert: str, values: list[str], mapping: dict) -> dict:
+        config = {"statusFormat": json.dumps({code: "$"}), "valueType": "Enum"}
+        config |= {"valueDesc": json.dumps({"range": values}), "enumMappingMap": mapping}
+        return {"value_convert": convert, "status_code": code, "config_item": config}
+
+    names = {"1": {"value": "alarm"}, "2": {"value": "normal"}}
+    smoke = datapoint("smoke_sensor_status", "enum", ["alarm", "normal"], names)
+    battery = datapoint("battery_state", "default", ["low", "middle", "high"], {})
+    smoke_alarm = DpMap({1: smoke, 14: battery})  # product dehj5gbayszxesma
+    assert smoke_alarm.decode({"1": "23"}) == {}  # not a value the cloud lists
+    assert smoke_alarm.decode({"1": "", "14": ""}) == smoke_alarm.decode({"1": None}) == {}
+    expected = {"smoke_sensor_status": "normal", "battery_state": "high"}
+    assert smoke_alarm.decode({"1": "2", "14": "high"}) == expected
+
+
 def test_encode_is_the_inverse_of_decode():
     commands = [
         {"code": "switch_led", "value": False},

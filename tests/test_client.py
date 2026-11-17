@@ -1,20 +1,26 @@
 """The account side: login, the device list and its cache, scenes, cloud push and fallback.
 
-The cloud SDK's network layer is replaced; everything above it is real.
+Either the cloud SDK's objects are replaced by stand-ins, or the real SDK talks to a fake of
+the service at the HTTP layer (fake_cloud.py). Everything above that is real.
 """
 
 import json
 import stat
+import threading
 from types import SimpleNamespace
 
 import pytest
+import requests
 from conftest import record
-from tuya_sharing import CustomerDevice, DeviceFunction, DeviceStatusRange
+from fake_cloud import FakeCloud, session
+from tuya_sharing import CustomerApi, CustomerDevice, DeviceFunction, DeviceStatusRange
+from tuya_sharing.device import DeviceRepository
 from tuya_sharing.exceptions import ApiRequestException
 
 from libtuya import CloudError, DeviceNotFound, NotLoggedIn, Scene, Tuya
 from libtuya import client as client_module
 from libtuya import cloud as cloud_module
+from libtuya.cli import main
 from libtuya.lan import LanAddress
 
 BULB = "dj_k3okx0w3bsgmindp"
@@ -47,7 +53,7 @@ def sdk_device(name: str, keep_map: bool) -> CustomerDevice:
     return device
 
 
-class FakeApi:
+class FakeApi(CustomerApi):
     """Stands in for the SDK's signed HTTP client."""
 
     def __init__(self):
@@ -104,6 +110,7 @@ class FakeManager:
     def __init__(self, client_id, user_code, terminal_id, endpoint, token_info, listener):
         self.listener = listener
         self.customer_api = FakeApi()
+        self.device_repository = DeviceRepository(self.customer_api)
         self.device_map = {}
         self.user_homes = []
         self.triggered = []
@@ -299,5 +306,84 @@ def test_a_login_renewed_by_another_process_is_picked_up(logged_in: Tuya, monkey
     assert logged_in.cloud._manager.customer_api.posted
 
     monkeypatch.setattr(FakeApi, "post", refuse)  # nothing newer was saved
+    logged_in.cloud._manager.customer_api.post = refuse
     with pytest.raises(NotLoggedIn, match="no longer valid"):
         plug.turn_on()
+
+
+@pytest.fixture
+def cloud(tuya: Tuya, monkeypatch) -> FakeCloud:
+    """The real SDK, logged in to a fake of the service that lists the bulb and the plug."""
+    service = FakeCloud(BULB, PLUG)
+    monkeypatch.setattr(requests.Session, "request", service.request)
+    tuya._write("session.json", session())
+    return service
+
+
+def test_requests_from_two_threads_get_through_a_token_renewal(tuya, make_device, monkeypatch):
+    """The SDK renews the token behind a plain flag: a request another thread made meanwhile
+    went out with the old token and was refused (tuya-device-sharing-sdk PR #82)."""
+    bulb, plug = make_device(BULB), make_device(PLUG)  # not on the LAN: commands use the cloud
+    failed = []
+
+    def start(action) -> threading.Thread:
+        def run() -> None:
+            try:
+                action()
+            except Exception as err:
+                failed.append(err)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return thread
+
+    # Last, a listing: it holds the client's lock while it waits for the cloud.
+    rounds = [(plug.turn_on, [BULB, PLUG])] * 3 + [(lambda: tuya.devices(refresh=True), [BULB])]
+    for second, commanded in rounds:
+        service = FakeCloud(BULB, PLUG)
+        service.refresh_time = 0.05
+        monkeypatch.setattr(requests.Session, "request", service.request)
+        tuya._write("session.json", session(expired=True))
+        tuya._cloud = None
+        threads = [start(bulb.turn_on)]
+        assert service.refreshing.wait(5)
+        threads.append(start(second))
+        for thread in threads:
+            thread.join(5)
+        assert not failed and not any(thread.is_alive() for thread in threads)
+        assert sorted(service.commands) == commanded
+
+
+def test_a_device_the_cloud_cannot_describe_is_listed_all_the_same(tuya, cloud, capsys):
+    """One device's failure used to end the listing (home-assistant/core#179722)."""
+    specification = f"/v1.1/m/life/{PLUG}/specifications"
+    busy = {"success": False, "code": "-9999999", "msg": "Remote api run unknown failed"}
+    cloud.fail[specification] = busy
+    bulb, plug = tuya.devices()
+    assert ("incomplete" in bulb.record, plug.record["incomplete"]) == (False, ["specification"])
+    assert bulb.entities and plug.dp_map and not plug.record["function"]
+    assert main(["--home", str(tuya.home), "devices"]) == 0
+    assert f"{plug.name} *" in capsys.readouterr().out
+
+    del cloud.fail[specification]
+    described = tuya.devices(refresh=True)[1].record["function"]
+    cloud.fail[specification] = busy  # a description once given is kept
+    assert tuya.devices(refresh=True)[1].record["function"] == described
+
+
+def test_an_empty_answer_does_not_replace_the_saved_devices(tuya, cloud, monkeypatch):
+    address = LanAddress("192.168.1.20", "3.4")
+    monkeypatch.setattr(client_module, "discover", lambda keys, timeout: {BULB: address})
+    tuya.devices()
+    cloud.homes = []
+    with pytest.raises(CloudError, match="listed no devices"):
+        tuya.devices(refresh=True)
+    assert [(d.id, d.address) for d in Tuya(tuya.home).devices()] == [(BULB, address), (PLUG, None)]
+    assert tuya.devices(refresh=True, accept_empty=True) == []
+
+
+def test_a_malformed_datapoint_relation_costs_only_that_datapoint(tuya, cloud, caplog):
+    cloud.relations[PLUG].append({"statusCode": "relay_status", "supportLocal": True})  # no dpId
+    plug = tuya.devices()[1]
+    assert plug.dp_map.dp_ids == sorted(int(dp) for dp in record(PLUG)["local_strategy"])
+    assert "incomplete" not in plug.record and "WARNING" not in caplog.text

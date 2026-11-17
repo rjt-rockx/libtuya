@@ -20,6 +20,7 @@ from tinytuya import scanner
 
 from .errors import LanError
 
+_LOGGER = logging.getLogger(__name__)
 # At DEBUG TinyTuya logs local keys and uses a fixed IV for protocol 3.5, so it
 # must not inherit a root logger set to DEBUG.
 logging.getLogger("tinytuya").setLevel(logging.INFO)
@@ -155,14 +156,16 @@ class Connection:
             owner.set_sendRetryLimit(0 if write else None)
             try:
                 result = function(*args)
-                rejected = write and owner.cmd_retcode
+                ack_code = owner.cmd_retcode if write else None
             finally:
                 owner.set_retry(True)
                 owner.set_sendRetryLimit(None)
         if result and "Err" in result:
             raise _error(result)
-        if rejected:
-            raise LanError(f"the device refused the command (code {rejected})")
+        if ack_code:
+            # Not a refusal: Tuya's open device code acknowledges every command with 1, success
+            # included (TuyaOpen tuya_lan.c). A refused command comes back as an error reply.
+            _LOGGER.debug("%s acknowledged the command with code %s", self._device.id, ack_code)
         result = result or {}
         # A gateway's connection also carries its sub-devices' reports.
         if (result.get("cid") or (result.get("data") or {}).get("cid")) != self._cid:

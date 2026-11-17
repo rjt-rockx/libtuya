@@ -58,6 +58,8 @@ class FakeTuyaDevice:
     ``dps`` and ``cids[cid]`` hold the current datapoints and ``received`` the decoded JSON of
     every CONTROL / CONTROL_NEW command, exactly as sent; tests may read and modify all three.
     ``port`` is assigned by the OS on the first start() and kept if the fake is restarted.
+    ``ack_code`` is the return code with which commands are acknowledged: TuyaOpen's device code
+    sends 1, which a little-endian device puts on the wire as 01 00 00 00, read as 16777216.
     """
 
     def __init__(
@@ -67,6 +69,7 @@ class FakeTuyaDevice:
         version: str = "3.3",
         dps: dict[str, Any] | None = None,
         cids: dict[str, dict[str, Any]] | None = None,
+        ack_code: int = 0,
     ) -> None:
         if str(version) not in VERSIONS:
             raise ValueError(f"unsupported version {version!r}, expected one of {VERSIONS}")
@@ -78,6 +81,7 @@ class FakeTuyaDevice:
         self.dps = _str_keys(dps or {})
         self.cids = {cid: _str_keys(child) for cid, child in (cids or {}).items()}
         self.received: list[dict[str, Any]] = []
+        self.ack_code = ack_code
         self._key = local_key.encode("latin1")
         self._negotiates = self.version in ("3.4", "3.5")  # connections start with a handshake
         is_35 = self.version == "3.5"
@@ -213,7 +217,7 @@ class FakeTuyaDevice:
             touched = {dp: value for dp, value in dict(dps).items() if dp in wanted}
         # A bare ack is all that HEART_BEAT and anything we cannot serve get. After CONTROL and
         # UPDATEDPS a device then reports the datapoints concerned in a STATUS to all its clients.
-        self._send(client, cmd, seqno)
+        self._send(client, cmd, seqno, retcode=self.ack_code if control else 0)
         self._broadcast(touched, cid)
         return True
 

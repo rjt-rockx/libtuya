@@ -63,6 +63,24 @@ _ENCODERS: dict[str, Callable[[Any, dict[str, Any]], Any]] = {
 }
 
 
+def _unreadable(raw: Any, convert: str, config: Mapping[str, Any]) -> str | None:
+    """Why a raw value cannot be read, if it cannot.
+
+    For no value, an empty one or an enumeration value it does not know, the SDK's
+    conversions return the first or lowest value the datapoint can take, which the
+    device did not report (tuya-device-sharing-sdk#86).
+    """
+    if raw is None:
+        return "no value"
+    if raw == "" and str(config.get("valueType")).capitalize() not in ("String", "Raw"):
+        return "empty value"
+    if convert == "enum":
+        known = config.get("enumMappingMap") or {}
+        if not any(key in known and "value" in known[key] for key in (str(raw), str(raw).lower())):
+            return "not one of the values the cloud lists"
+    return None
+
+
 class DpMap:
     """The datapoints of one device, built from its ``local_strategy``."""
 
@@ -95,12 +113,15 @@ class DpMap:
         return self._by_code.get(code)
 
     def decode(self, dps: Mapping[Any, Any]) -> dict[str, Any]:
-        """Turn raw LAN datapoints into cloud status, skipping unknown ones."""
+        """Turn raw LAN datapoints into cloud status, skipping those that cannot be read."""
         status: dict[str, Any] = {}
         for dp_id, raw in dps.items():
             if (entry := self._by_id.get(int(dp_id))) is None:
                 continue
             convert, config = entry
+            if reason := _unreadable(raw, convert, config):
+                _LOGGER.debug("Skipping dp %s=%r: %s", dp_id, raw, reason)
+                continue
             try:
                 code, value = strategy.convert(convert, (None, raw), config)
             except Exception as err:  # the SDK's conversions raise all sorts

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import cloud as cloud_api
-from .cloud import Scene
+from .cloud import Record, Scene
 from .device import Device
 from .errors import CloudError, DeviceNotFound, LanError, NotLoggedIn, TuyaError
 from .lan import LanAddress, discover, probe_version
@@ -49,7 +49,7 @@ class Tuya:
         self._cloud: cloud_api.Cloud | None = None
         self._devices: list[Device] | None = None
         self._home_ids: list[str] = []
-        self._lock = threading.RLock()  # guards the device list and the files
+        self._lock = threading.RLock()  # guards the device list
 
     # -- account ----------------------------------------------------------
 
@@ -123,17 +123,24 @@ class Tuya:
 
     # -- devices ----------------------------------------------------------
 
-    def devices(self, refresh: bool = False, scan_timeout: float = 8.0) -> list[Device]:
+    def devices(
+        self, refresh: bool = False, scan_timeout: float = 8.0, *, accept_empty: bool = False
+    ) -> list[Device]:
         """The account's devices.
 
         Served from the saved list unless `refresh` is set or there is none
         yet. A refresh asks the cloud, looks for the devices on the LAN (which
         takes `scan_timeout` seconds unless every device answers sooner) and
         returns new `Device` objects.
+
+        A device the cloud did not fully describe keeps the description saved
+        for it, if any; its ``record["incomplete"]`` says what was missing. If
+        the cloud lists no devices at all while some are saved, the saved list
+        is kept and CloudError raised, unless `accept_empty` is set.
         """
         with self._lock:
             if refresh or not self._known():
-                self._fetch()
+                self._fetch(accept_empty)
                 try:
                     self.scan(scan_timeout)
                 except LanError as err:
@@ -324,12 +331,27 @@ class Tuya:
                 ]
             return self._devices
 
-    def _fetch(self) -> list[Device]:
-        """Replace the device list with the cloud's, keeping known LAN addresses."""
+    def _fetch(self, accept_empty: bool = False) -> list[Device]:
+        """Replace the device list with the cloud's, keeping what only the saved one has.
+
+        That is the LAN addresses, and descriptions the cloud failed to give this time.
+        """
         with self._lock:
-            known = {device.id: device.address for device in self._known()}
+            saved = {device.id: device for device in self._known()}
             records = self._ask_cloud(lambda cloud: cloud.devices())
-            self._devices = [Device(self, record, known.get(record["id"])) for record in records]
+            if saved and not records and not accept_empty:
+                # More likely a fault on the cloud's side than every device gone.
+                kept = f"kept the {len(saved)} saved ones"
+                raise CloudError(f"the Tuya cloud listed no devices; {kept}")
+            devices = []
+            for record in records:
+                old = saved.get(record["id"])
+                if old is not None:
+                    _keep_description(record, old.record)
+                devices.append(Device(self, record, old.address if old else None))
+            if saved:
+                _log_changes(saved, devices)
+            self._devices = devices
             self._home_ids = self._ask_cloud(lambda cloud: cloud.home_ids())
             return self._devices
 
@@ -360,11 +382,36 @@ class Tuya:
             return {}
 
     def _write(self, name: str, data: dict[str, Any]) -> None:
-        """Write atomically and privately: these files hold tokens and local keys."""
-        with self._lock:
-            self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
-            temporary = self.home / f".{name}.{os.getpid()}.tmp"
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            with open(os.open(temporary, flags, 0o600), "w") as file:
-                json.dump(data, file, indent=1)
-            temporary.replace(self.home / name)
+        """Write atomically and privately: these files hold tokens and local keys.
+
+        Without taking the lock: renewed tokens are saved from inside a cloud request,
+        which another thread holding the lock may be waiting for.
+        """
+        self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = self.home / f".{name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        with open(os.open(temporary, flags, 0o600), "w") as file:
+            json.dump(data, file, indent=1)
+        temporary.replace(self.home / name)
+
+
+def _keep_description(record: Record, saved: Record) -> None:
+    """Take from the saved record what the cloud did not describe this time."""
+    for key in ("function", "status_range", "local_strategy"):
+        if saved.get(key) and (record.get("incomplete") or not record.get(key)):
+            record[key] = saved[key]
+
+
+def _log_changes(saved: dict[str, Device], devices: list[Device]) -> None:
+    """Say which devices a refresh added or dropped, and which have a new local key."""
+    listed = {device.id for device in devices}
+    for change, names in (
+        ("New devices", [d.name for d in devices if d.id not in saved]),
+        ("Devices no longer listed", [d.name for d in saved.values() if d.id not in listed]),
+        (
+            "New local keys",
+            [d.name for d in devices if d.id in saved and d.local_key != saved[d.id].local_key],
+        ),
+    ):
+        if names:
+            _LOGGER.info("%s: %s", change, ", ".join(names))

@@ -106,6 +106,21 @@ def test_the_cloud_takes_over_when_the_lan_cannot(bulb, tuya):
         device.turn_off()
 
 
+@pytest.mark.parametrize("version", ["3.3", "3.4", "3.5"])
+@pytest.mark.parametrize("code", [1, 16777216])
+def test_an_acknowledgement_code_is_not_a_refusal(make_device, tuya, version, code):
+    """TuyaOpen's device code acknowledges every command with code 1, carried out or not."""
+    tuya._cloud = cloud = StubCloud()
+    with fake(PLUG, version, PLUG_DPS, ack_code=code) as on_the_wire:
+        device = make_device(PLUG, LanAddress("127.0.0.1", version, on_the_wire.port))
+        device.set_raw(switch_1=True)
+        assert (device.transport, len(on_the_wire.received), cloud.sent) == ("lan", 1, [])
+
+        tuya.cloud_fallback = False
+        device.set_raw(switch_1=False)
+        assert on_the_wire.dps["1"] is False
+
+
 def test_an_answer_without_any_status_is_not_taken_for_one(make_device, tuya):
     tuya._cloud = StubCloud()
     with fake(PLUG, "3.3", {}) as on_the_wire:
