@@ -112,6 +112,7 @@ def _definition(platform: str, device: CustomerDevice, d: dict[str, Any]) -> Any
                     current_state_dpcode="current_state",
                     current_state_wrapper="current_state_wrapper",
                     instruction_wrapper="instruction_wrapper",
+                    position_wrapper="position_wrapper",
                     set_position_dpcode="set_position",
                 ),
             )
