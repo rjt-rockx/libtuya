@@ -206,6 +206,14 @@ def test_watching_re_reads_report_only_what_changed(plug, monkeypatch):
     changes.close()
 
 
+def test_nested_connected_blocks_share_one_connection(plug):
+    device, on_the_wire = plug
+    with device.connected():
+        device.toggle()  # holds a connection of its own, inside
+        device.refresh()
+    assert on_the_wire.connections == 1
+
+
 def test_a_sub_device_is_reached_through_its_gateway(make_device, tuya):
     with fake(GATEWAY, "3.4", cids={"node-1": dict(PLUG_DPS)}) as on_the_wire:
         gateway = make_device(GATEWAY, LanAddress("127.0.0.1", "3.4", on_the_wire.port))
@@ -253,9 +261,11 @@ def test_a_hub_without_a_key_of_its_own(tuya):
     key = local_key(PLUG)
     with FakeTuyaDevice(GATEWAY, key, "3.4", cids={"node-1": dict(PLUG_DPS)}) as on_the_wire:
         hub = Device(tuya, hub_record, LanAddress("127.0.0.1", "3.4", on_the_wire.port))
-        child = Device(tuya, record(PLUG, node_id="node-1"))
-        tuya._devices = [hub, child]
+        child = Device(tuya, record(PLUG, node_id="node-1", sub=True))
+        missing = Device(tuya, record(BULB))  # a Wi-Fi device that was not found on the LAN
+        tuya._devices = [hub, child, missing]
         assert tuya.gateway_of(child) is hub
+        assert tuya.gateway_of(missing) is None
 
         child.turn_on()
         assert on_the_wire.cids["node-1"]["1"] is True

@@ -48,6 +48,7 @@ class Device:
         self.transport: str | None = None
         self._connection: Connection | None = None
         self._connection_lock = threading.Lock()
+        self._holders = 0  # `connected()` blocks open, nested or in other threads
         self._may_relocate = True
 
     @property
@@ -219,12 +220,17 @@ class Device:
         to make some devices stop answering.
         """
         with self._connection_lock:
-            held = self._connection = self._try_connect(persist=True)
+            self._holders += 1
+            if self._holders == 1:  # an outer block's connection is shared, not replaced
+                self._connection = self._try_connect(persist=True)
         try:
             yield
         finally:
             with self._connection_lock:
-                self._connection = None
+                self._holders -= 1
+                held = self._connection if not self._holders else None
+                if not self._holders:
+                    self._connection = None
             if held is not None:
                 held.close()
 

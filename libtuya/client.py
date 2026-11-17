@@ -255,14 +255,17 @@ class Tuya:
         The cloud does not link the two, and its `sub` flag is also set on
         gateways. What does tell them apart: a sub-device never shows up on
         the LAN itself, and its local key is the one its gateway answers to.
-        The gateway's own record has that same key, or none at all.
+        The gateway's own record has that same key, or none at all; the
+        second case is only assumed for a device the cloud marks as a
+        sub-device, so that a Wi-Fi device that was not found is not taken for one.
         """
         if device.address or not device.local_key:
             return None
         on_lan = [other for other in self.devices() if other.address]
+        is_sub = bool(device.record.get("sub") or device.record.get("node_id"))
         for gateways in (
             [other for other in on_lan if other.local_key == device.local_key],
-            [other for other in on_lan if not other.local_key],
+            [other for other in on_lan if not other.local_key] if is_sub else [],
         ):
             if gateways:
                 return gateways[0] if len(gateways) == 1 else None

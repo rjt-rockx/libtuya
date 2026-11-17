@@ -81,6 +81,7 @@ class FakeTuyaDevice:
         self.dps = _str_keys(dps or {})
         self.cids = {cid: _str_keys(child) for cid, child in (cids or {}).items()}
         self.received: list[dict[str, Any]] = []
+        self.connections = 0  # accepted so far
         self.ack_code = ack_code
         self._key = local_key.encode("latin1")
         self._negotiates = self.version in ("3.4", "3.5")  # connections start with a handshake
@@ -148,6 +149,7 @@ class FakeTuyaDevice:
             # An ack followed by a STATUS is two small writes; do not let Nagle delay the second.
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             client = _Client(sock, self._key, ready=not self._negotiates)
+            self.connections += 1
             with self._lock:  # held so that the thread cannot unregister before it is registered
                 self._clients[client] = self._spawn(self._serve, client)
 
