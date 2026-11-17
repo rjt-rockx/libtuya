@@ -168,6 +168,11 @@ def _limits(wrapper: DeviceWrapper[Any]) -> dict[str, Any]:
     return {}
 
 
+def on_off_state(on: bool | None) -> str | None:
+    """Home Assistant's state for something that is on or off: "on", "off" or None."""
+    return None if on is None else "on" if on else "off"
+
+
 class Entity:
     """One controllable or readable feature of a device.
 
@@ -226,7 +231,7 @@ class Entity:
 
     def state(self) -> dict[str, Any]:
         """Value of every attribute, as of the device's last `refresh()` or write."""
-        values = {}
+        values: dict[str, Any] = {}
         for attribute, wrapper in self.wrappers.items():
             if isinstance(wrapper, DeltaIntegerWrapper) and not self._pushed:
                 # The device reports increments, which only add up to a total
@@ -279,8 +284,10 @@ class Entity:
         use `state()` there.
         """
         state = self.state()
-        if self.on_off or len(state) != 1:
+        if self.on_off:
             return state.get(self.on_off)
+        if len(state) != 1:
+            return None
         return next(iter(state.values()))
 
     def commands(self, value: Any = _UNSET, /, **attributes: Any) -> list[dict[str, Any]]:

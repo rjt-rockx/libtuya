@@ -53,7 +53,7 @@ class Climate(Entity):
             return None
         if not wrapper.native_unit:  # then the device's own unit setting decides
             setting = self.device.status.get("temp_unit_convert")
-            return {"c": _CELSIUS, "f": _FAHRENHEIT}.get(setting)
+            return {"c": _CELSIUS, "f": _FAHRENHEIT}.get(str(setting))
         unit = wrapper.native_unit.lower()
         if unit in CELSIUS_ALIASES:
             return _CELSIUS

@@ -212,7 +212,7 @@ def control(tuya: Tuya, args: argparse.Namespace) -> Result:
             raise TuyaError(f"`{action}` needs a value")
         return float(value)
 
-    def text() -> str:
+    def word() -> str:
         if value is None:
             raise TuyaError(f"`{action}` needs a value")
         return value
@@ -228,9 +228,9 @@ def control(tuya: Tuya, args: argparse.Namespace) -> Result:
         elif action == "position":
             able_to("set_position").set_position(round(number()))
         elif action == "mode":
-            able_to("set_hvac_mode").set_hvac_mode(text())
+            able_to("set_hvac_mode").set_hvac_mode(word())
         elif action == "preset":
-            able_to("set_preset_mode").set_preset_mode(text())
+            able_to("set_preset_mode").set_preset_mode(word())
         elif action == "speed":
             able_to("set_percentage").set_percentage(number())
         elif action == "humidity":

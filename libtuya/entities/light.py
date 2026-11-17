@@ -16,7 +16,7 @@ from typing import Any
 from tuya_device_handlers.device_wrapper.light import ColorTempWrapper
 
 from ..errors import TuyaError
-from .base import Entity
+from .base import Entity, on_off_state
 
 _LACKING = {
     "hs": "adjustable colour",
@@ -152,7 +152,7 @@ class Light(Entity):
         modes = self.supported_color_modes
         mode = self.color_mode if on else None
         shown: dict[str, Any] = {
-            "state": {True: "on", False: "off"}.get(on),
+            "state": on_off_state(on),
             "supported_color_modes": sorted(modes),
             "color_mode": mode,
         }

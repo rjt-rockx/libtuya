@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import Entity
+from .base import Entity, on_off_state
 
 
 class Siren(Entity):
@@ -25,4 +25,4 @@ class Siren(Entity):
 
     def summary(self) -> dict[str, Any]:
         """Home Assistant's state ("on" or "off") for this entity."""
-        return {"state": {True: "on", False: "off"}.get(self.is_on)}
+        return {"state": on_off_state(self.is_on)}

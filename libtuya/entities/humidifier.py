@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import Entity
+from .base import Entity, on_off_state
 
 
 class Humidifier(Entity):
@@ -67,7 +67,7 @@ class Humidifier(Entity):
     def summary(self) -> dict[str, Any]:
         """Home Assistant's state ("on" or "off") and attributes for this entity."""
         shown: dict[str, Any] = {
-            "state": {True: "on", False: "off"}.get(self.is_on),
+            "state": on_off_state(self.is_on),
             "min_humidity": self.min_humidity,
             "max_humidity": self.max_humidity,
         }
