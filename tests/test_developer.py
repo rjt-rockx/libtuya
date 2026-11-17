@@ -152,6 +152,13 @@ def test_an_unusable_session_is_no_login(cloud, tuya, session):
 def test_a_listing_says_what_it_lacks(cloud):
     cloud.routes[SPEC] = refused(2009, "not support this device")
     assert DeveloperCloud(SESSION).devices()[-1]["incomplete"] == ["specification"]
+    # Another device of the same product is asked again; when that works, it is complete.
+    hall = canned.BULB | {"id": "bf00000000000000hall"}
+    bulb_spec, hall_spec = about(BULB_ID)[0], about(hall["id"])[0]
+    cloud.routes |= {LIST: ok([canned.BULB, hall]), hall_spec: canned.ROUTES[bulb_spec]}
+    cloud.routes[bulb_spec] = refused(2009, "not support this device")
+    first, second = DeveloperCloud(SESSION).devices()
+    assert (first.get("incomplete"), second.get("incomplete")) == (["specification"], None)
     cloud.routes[LIST] = ok([])  # an empty account is the client's to accept or refuse
     assert DeveloperCloud(SESSION).devices() == []
 
