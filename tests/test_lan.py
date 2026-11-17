@@ -261,12 +261,15 @@ def test_nested_connected_blocks_share_one_connection(plug):
     assert on_the_wire.connections == 1
 
 
-def test_sub_devices_share_their_gateways_one_connection(make_device):
+@pytest.mark.parametrize("hub_key", ["its own", "none"])
+def test_sub_devices_share_their_gateways_one_connection(make_device, hub_key):
+    key = local_key(GATEWAY)  # a hub without one answers to the key its sub-devices carry
     children = {"node-1": dict(PLUG_DPS), "node-2": dict(BULB_DPS)}
-    with fake(GATEWAY, "3.4", cids=children) as on_the_wire:
-        make_device(GATEWAY, LanAddress("127.0.0.1", "3.4", on_the_wire.port))
-        plug = make_device(PLUG, local_key=local_key(GATEWAY), node_id="node-1")
-        bulb = make_device(BULB, local_key=local_key(GATEWAY), node_id="node-2")
+    with FakeTuyaDevice(GATEWAY, key, "3.4", cids=children) as on_the_wire:
+        address = LanAddress("127.0.0.1", "3.4", on_the_wire.port)
+        make_device(GATEWAY, address, local_key=key if hub_key == "its own" else "")
+        plug = make_device(PLUG, local_key=key, node_id="node-1")
+        bulb = make_device(BULB, local_key=key, node_id="node-2")
         with plug.connected():
             plug.refresh()
             bulb.refresh()  # a sibling, through the same session

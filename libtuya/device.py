@@ -222,15 +222,18 @@ class Device:
         sub-devices: most gateways accept only one.
         """
         gateway = self._client.gateway_of(self)
-        if gateway is not None:
-            with gateway.connected():
-                yield
-            return
+        # A gateway without a key of its own answers to its sub-devices' key.
+        with gateway._holding(self.local_key) if gateway else self._holding():
+            yield
+
+    @contextmanager
+    def _holding(self, key: str = "") -> Iterator[None]:
+        """Hold this device's connection for the length of the block; `key` as in `_connect`."""
         with self._connection_lock:
             self._holders += 1
             if self._holders == 1:  # an outer block's connection is shared, not replaced
                 address = self.address
-                opened = self._try_connect(persist=True)
+                opened = self._try_connect(persist=True, key=key)
                 self._keep(opened, address)
                 if opened is not None and opened is not self._connection:
                     opened.close()  # built for an address the device has left
@@ -312,9 +315,9 @@ class Device:
         cid = getattr(self.info, "node_id", None) or getattr(self.info, "uuid", None)
         return Connection(self.id, "", None, dp_ids, cid=cid, parent=parent)
 
-    def _try_connect(self, persist: bool) -> Connection | None:
+    def _try_connect(self, persist: bool, key: str = "") -> Connection | None:
         try:
-            return self._connect(persist)
+            return self._connect(persist, key)
         except LanError:
             return None
 
