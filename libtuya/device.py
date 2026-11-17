@@ -345,8 +345,9 @@ class Device:
         self._drop_connection()
 
     def _drop_connection(self) -> None:
-        with self._connection_lock:
-            stale, self._connection = self._connection, None
+        # Not under the connection lock: the client calls this holding its own lock,
+        # and a device call holds the connection lock while it waits for the client's.
+        stale, self._connection = self._connection, None
         if stale is not None:
             stale.close()
 

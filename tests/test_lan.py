@@ -198,6 +198,21 @@ def test_a_held_sub_device_connection_follows_its_gateway(make_device, tuya, mon
             assert child.transport == "lan"
 
 
+def test_a_move_does_not_wait_for_a_device_call(make_device, tuya):
+    """A device call takes its connection lock, then the client's; a move holds the client's."""
+    device = make_device(PLUG, LanAddress("127.0.0.1", "3.3"))
+    moved = threading.Event()
+
+    def move() -> None:
+        with tuya._lock:  # as scan() and a relocation do
+            device._moved(LanAddress("127.0.0.2", "3.3"))
+            moved.set()
+
+    with device._connection_lock:  # a device call in progress
+        threading.Thread(target=move, daemon=True).start()
+        assert moved.wait(2)
+
+
 def test_watching_pushes(plug):
     device, on_the_wire = plug
     energy = device.entity("sensor.add_ele")
