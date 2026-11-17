@@ -213,6 +213,20 @@ def test_a_move_does_not_wait_for_a_device_call(make_device, tuya):
         assert moved.wait(2)
 
 
+def test_a_connection_built_for_an_old_address_is_not_kept(make_device):
+    device = make_device(PLUG, LanAddress("127.0.0.1", "3.3"))
+    build = device._connect
+
+    def connect_while_a_scan_moves_it(*args, **kwargs):
+        connection = build(*args, **kwargs)
+        device._moved(LanAddress("127.0.0.2", "3.3"))
+        return connection
+
+    device._connect = connect_while_a_scan_moves_it
+    device._lan_connection()  # used for this one call
+    assert device._connection is None  # but not kept for the next
+
+
 def test_watching_pushes(plug):
     device, on_the_wire = plug
     energy = device.entity("sensor.add_ele")

@@ -222,7 +222,11 @@ class Device:
         with self._connection_lock:
             self._holders += 1
             if self._holders == 1:  # an outer block's connection is shared, not replaced
-                self._connection = self._try_connect(persist=True)
+                address = self.address
+                opened = self._try_connect(persist=True)
+                self._keep(opened, address)
+                if opened is not None and opened is not self._connection:
+                    opened.close()  # built for an address the device has left
         try:
             yield
         finally:
@@ -309,11 +313,24 @@ class Device:
 
     def _lan_connection(self, key: str = "") -> Connection:
         with self._connection_lock:
-            if self._connection is None and self.address is not None:
-                self._connection = self._connect(key=key)
+            if self._connection is not None:
+                return self._connection
             # A sub-device (no address of its own) is cheap to set up each
             # time, and that way follows its gateway to a new address.
-            return self._connection or self._connect(key=key)
+            address = self.address
+            connection = self._connect(key=key)
+            if address is not None:
+                self._keep(connection, address)
+            return connection
+
+    def _keep(self, connection: Connection | None, address: LanAddress | None) -> None:
+        """Hold a connection built for `address`, unless the device moved meanwhile.
+
+        A move does not take the connection lock (see `_drop_connection`), so it
+        can happen while a connection is being built for the old address.
+        """
+        if connection is not None and self.address == address:
+            self._connection = connection
 
     def _over_lan(
         self, call: Callable[[Connection], dict[str, Any]], write: bool = False
