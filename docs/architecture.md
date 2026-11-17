@@ -6,7 +6,7 @@ them so that one QR-code login is enough to control devices locally.
 ```
             tuya login (once)                     every call afterwards
  ┌─────────────────────────────────┐   ┌──────────────────────────────────────┐
- │ cloud.py                        │   │ entities.py                          │
+ │ cloud.py                        │   │ entities/                            │
  │ tuya-device-sharing-sdk         │   │ tuya-device-handlers + ha_tuya.json  │
  │  QR login, tokens               │   │  "light.turn_on(brightness=128)"     │
  │  device list, local keys        │   │        │ commands by DP code         │
@@ -30,7 +30,7 @@ them so that one QR-code login is enough to control devices locally.
 | `lan.py` | Discovery by device id and a `Connection` that wraps one TinyTuya session: explicit errors, a lock, the device22 and protocol 3.2 special cases. |
 | `dpmap.py` | Translation between LAN datapoints (`{"20": true}`) and cloud status (`{"switch_led": true}`), in both directions. |
 | `device.py` | `Device`: holds the status, picks the transport, builds entities. |
-| `entities.py` | `Entity` and `Light`: Home Assistant's view of a device, built with tuya-device-handlers. |
+| `entities/` | `Entity` and one class per Home Assistant platform (`Light`, `Climate`, `Cover`, `Fan`, `Sensor`, ...): Home Assistant's view of a device and its behaviour, built with tuya-device-handlers. |
 | `cli.py` | The `tuya` command. Uses only the public API. |
 | `data/ha_tuya.json` | Generated; see below. |
 
@@ -77,8 +77,8 @@ in `third_party/` and `scripts/gen_ha_tables.py` extracts the tables into
 every Home Assistant name replaced by a placeholder; it does not need Home
 Assistant installed.
 
-`entities.py` then mirrors the dozen lines each Home Assistant platform uses
-to call the handlers. The result is checked against Home Assistant itself: a
+`entities/base.py` then mirrors the dozen lines each Home Assistant platform
+uses to call the handlers. The result is checked against Home Assistant itself: a
 test builds the entities for every device fixture in the vendored release and
 compares them, device by device, with Home Assistant's own test snapshots.
 
@@ -87,8 +87,22 @@ uses. The tables reference handler classes by name, and the handlers make no
 compatibility promise to anyone but Home Assistant.
 
 An `Entity` exposes the handlers' wrappers as named attributes with
-`state()` and `set()`. Only `Light.turn_on` adds behaviour of its own (mode
-switching between white and colour), following Home Assistant's light entity.
+`state()`, `describe()` and `set()`. On top of that, each platform has a class
+that follows Home Assistant's entity class for it: properties under Home
+Assistant's names and value domains (`is_on`, `brightness` 0-255, `hvac_mode`,
+`current_position` 0-100 with 100 open, `percentage`, `activity` ...),
+methods named after Home Assistant's services (`turn_on(brightness=...,
+color_temp_kelvin=...)`, `set_hvac_mode`, `open`, `set_position`,
+`set_percentage`, `return_to_base` ...), each sending the commands Home
+Assistant would send in one call, and `summary()`, the state and attributes
+Home Assistant would show.
+
+`tests/test_ha_parity.py` compares `summary()` with Home Assistant's recorded
+state for every fixture entity of every platform, and the per-platform tests
+check the commands of the important actions against Home Assistant's own
+tests. Where libtuya departs from Home Assistant it is to refuse instead of
+guessing: an argument a device cannot use raises `TuyaError`, a bad value
+`ValueError`, where Home Assistant sometimes drops or converts it.
 
 ## Transport policy
 

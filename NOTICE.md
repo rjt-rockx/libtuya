@@ -18,9 +18,12 @@ contributors. Licence text: `third_party/home-assistant-core/LICENSE.md`.
   descriptions and English entity names, changed as follows: converted from
   Python to JSON, descriptions marked deprecated left out, callables dropped,
   and Home Assistant's own constants reduced to their names.
-- `Light.turn_on` in `libtuya/entities.py` follows the logic of
-  `TuyaLightEntity.async_turn_on` in `homeassistant/components/tuya/light.py`,
-  rewritten for this library.
+- The entity classes in `libtuya/entities/` follow the behaviour of Home
+  Assistant's Tuya entity classes (`homeassistant/components/tuya/<platform>.py`)
+  and of the generic entity of each platform (`homeassistant/components/<platform>/`)
+  for how states and attributes are derived, rewritten for this library. The
+  colour conversions in `libtuya/entities/light.py` (colour to RGB and CIE xy,
+  colour temperature to colour) are ported from `homeassistant/util/color.py`.
 
 ## Used as dependencies
 

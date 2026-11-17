@@ -39,7 +39,9 @@ Python 3.13+ (required by `tuya-device-handlers`).
 - `libtuya/lan.py` — discovery and `Connection` (one TinyTuya session, locked, errors as exceptions).
 - `libtuya/dpmap.py` — LAN datapoints (`{"20": true}`) to and from cloud codes (`{"switch_led": true}`).
 - `libtuya/device.py` — `Device`: status, LAN-first transport with cloud fallback, entities.
-- `libtuya/entities.py` — `Entity`, `Light`: Home Assistant's view of a device.
+- `libtuya/entities/` — `Entity` and one class per Home Assistant platform (`Light`, `Climate`,
+  `Cover`, ...): Home Assistant's view of a device and its behaviour. `tests/test_ha_parity.py`
+  checks every class's `summary()` against Home Assistant's recorded states.
 - `libtuya/cli.py` — the `tuya` command, using only the public API.
 - `scripts/` — upstream sync and the table generator.
 - `third_party/home-assistant-core/` — unmodified upstream snapshot. Never edit; see `third_party/README.md`.
