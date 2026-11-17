@@ -410,3 +410,21 @@ def test_a_replaced_login_does_not_come_back(logged_in: Tuya):
     logged_in._logged_in(SESSION | {"user_code": "someone else"})
     old._manager.listener.update_token(NEW_TOKEN)  # the old login's SDK renews its tokens
     assert logged_in._read("session.json")["user_code"] == "someone else"
+
+
+def test_a_renewal_racing_a_new_login_does_not_bring_the_old_one_back(logged_in, monkeypatch):
+    old, read, racing = logged_in.cloud, logged_in._read, []
+
+    def read_while_someone_logs_in(name):
+        data = read(name)
+        if name == "session.json" and not racing:  # the renewal checking which login is saved
+            new_login = SESSION | {"user_code": "someone else"}
+            racing.append(threading.Thread(target=logged_in._logged_in, args=(new_login,)))
+            racing[0].start()
+            racing[0].join(0.5)  # let it get as far as it can
+        return data
+
+    monkeypatch.setattr(logged_in, "_read", read_while_someone_logs_in)
+    old._manager.listener.update_token(NEW_TOKEN)
+    racing[0].join()
+    assert read("session.json")["user_code"] == "someone else"

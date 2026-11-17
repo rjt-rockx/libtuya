@@ -58,6 +58,9 @@ class Tuya:
         self._devices: list[Device] | None = None
         self._home_ids: list[str] = []
         self._lock = threading.RLock()  # guards the device list
+        # Guards replacing session.json. Not `_lock`: renewed tokens are saved from
+        # inside cloud requests, which a thread holding `_lock` may be waiting for.
+        self._session_lock = threading.Lock()
 
     # -- account ----------------------------------------------------------
 
@@ -125,7 +128,8 @@ class Tuya:
         """
         with self._lock:
             # Tells this login apart from the next: see `cloud`.
-            self._write("session.json", session | {"login_id": uuid.uuid4().hex})
+            with self._session_lock:
+                self._write("session.json", session | {"login_id": uuid.uuid4().hex})
             if lan := self._read("devices.json").get("lan"):
                 self._write("devices.json", {"lan": lan})
             else:
@@ -147,8 +151,9 @@ class Tuya:
                     "removed in the app under Me > gear icon > Account and Security",
                     err,
                 )
-        for name in ("session.json", "devices.json"):
-            (self.home / name).unlink(missing_ok=True)
+        with self._session_lock:
+            for name in ("session.json", "devices.json"):
+                (self.home / name).unlink(missing_ok=True)
         self._cloud = self._devices = None
         self._home_ids = []
 
@@ -166,8 +171,9 @@ class Tuya:
                     def save(updated: Session) -> None:
                         # Renewed tokens of a login that has since been replaced (or
                         # logged out) must not bring it back.
-                        if self._read("session.json").get("login_id") == login_id:
-                            self._write("session.json", updated)
+                        with self._session_lock:
+                            if self._read("session.json").get("login_id") == login_id:
+                                self._write("session.json", updated)
 
                     self._cloud = cloud_api.Cloud(session, save)
                 else:
