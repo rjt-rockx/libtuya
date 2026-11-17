@@ -1,9 +1,10 @@
-"""Smart Life / Tuya Smart account access.
+"""Smart Life / Tuya Smart account access by QR code.
 
 Uses tuya-device-sharing-sdk, the same QR-code login Home Assistant uses, so no
-Tuya developer account is needed. The cloud is only required to log in, to
-list devices (with their local keys and datapoint maps) and as a fallback when
-a device cannot be reached on the LAN.
+Tuya developer account is needed (developer.py is the way in for those who
+have one). The cloud is only required to log in, to list devices (with their
+local keys and datapoint maps) and as a fallback when a device cannot be
+reached on the LAN.
 """
 
 from __future__ import annotations

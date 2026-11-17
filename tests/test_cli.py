@@ -4,6 +4,7 @@ import json
 
 import pytest
 from conftest import fake
+from fake_openapi import ROUTES, SESSION, UID, FakeTuyaCloud
 
 from libtuya.cli import main
 from libtuya.lan import LanAddress
@@ -77,3 +78,21 @@ def test_listing_and_errors(run):
     assert run("control", "breaker", "brightness", "50")[0] == 1  # a plug is not a light
     assert run("control", "breaker", "open") == (1, "")
     assert "has nothing that can open" in run.err
+
+
+def test_login_with_a_cloud_project(tuya, make_device, monkeypatch, capsys):
+    cloud = FakeTuyaCloud(dict(ROUTES)).install(monkeypatch)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: SESSION["access_secret"])
+    make_device(BULB, LanAddress("127.0.0.1", "3.4", 6668))  # saved under an earlier login
+    tuya._save()
+    tuya.login_developer(SESSION["access_id"], SESSION["access_secret"], "eu", uid=UID)
+    # Between a login and its first device list, health still asks no one.
+    asked = len(cloud.calls)
+    assert main(["--home", str(tuya.home), "health"]) == 0
+    assert "0 known" in capsys.readouterr().out and len(cloud.calls) == asked
+    project = ["--access-id", SESSION["access_id"], "--region", "eu", "--uid", UID]
+    assert main(["--home", str(tuya.home), "login", "--force", *project]) == 0
+    out, err = capsys.readouterr()
+    assert "Logged in. 2 devices, 1 found on the LAN." in out  # the bulb kept its address
+    assert SESSION["access_secret"] not in out + err
+    assert tuya.logged_in

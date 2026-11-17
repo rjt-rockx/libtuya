@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import colorsys
 import enum
+import getpass
 import json
 import logging
 import sys
@@ -122,10 +123,7 @@ def _describe(tuya: Tuya, device: Device) -> Result:
     return {"device": data}, "\n".join(lines)
 
 
-def login(tuya: Tuya, args: argparse.Namespace) -> Result:
-    if tuya.logged_in and not args.force:
-        return {"message": "Already logged in"}, "Already logged in (use --force to log in again)."
-    user_code = args.user_code
+def _qr_login(tuya: Tuya, user_code: str | None) -> None:
     if not user_code:
         print(f"User code ({USER_CODE_HINT}): ", end="", file=sys.stderr, flush=True)
         user_code = input().strip()
@@ -142,6 +140,24 @@ def login(tuya: Tuya, args: argparse.Namespace) -> Result:
         )
 
     tuya.login(user_code, show_qr)
+
+
+def login(tuya: Tuya, args: argparse.Namespace) -> Result:
+    if tuya.logged_in and not args.force:
+        return {"message": "Already logged in"}, "Already logged in (use --force to log in again)."
+    if args.access_id:
+        secret = args.access_secret or getpass.getpass("Access Secret of the cloud project: ")
+        tuya.login_developer(
+            args.access_id,
+            secret,
+            args.region or "",
+            uid=args.uid or "",
+            device_id=args.device_id or "",
+        )
+    elif args.region or args.uid or args.device_id or args.access_secret:
+        raise TuyaError("--region, --uid, --device-id and --access-secret go with --access-id")
+    else:
+        _qr_login(tuya, args.user_code)
     devices = tuya.devices(refresh=True)
     found = sum(1 for device in devices if device.address)
     text = f"Logged in. {len(devices)} devices, {found} found on the LAN."
@@ -355,8 +371,13 @@ def locate(tuya: Tuya, args: argparse.Namespace) -> Result:
 
 
 def health(tuya: Tuya, args: argparse.Namespace) -> Result:
-    # Only what is saved: this command must not log in, fetch or scan.
-    known = tuya.devices() if (tuya.home / "devices.json").exists() else []
+    # Only what is saved: this command must not log in, fetch or scan. After a login
+    # devices.json can hold LAN addresses and no device list yet.
+    try:
+        saved = json.loads((tuya.home / "devices.json").read_text())
+    except (OSError, ValueError):
+        saved = {}
+    known = tuya.devices() if isinstance(saved, dict) and saved.get("devices") else []
     data = {
         "home": str(tuya.home),
         "logged_in": tuya.logged_in,
@@ -395,13 +416,25 @@ def _parser() -> argparse.ArgumentParser:
 
     device_help = "number from `tuya devices`, name, part of a name, or id"
     command = add(
-        "login", login, "Log in by scanning a QR code with the Smart Life or Tuya Smart app"
+        "login",
+        login,
+        "Log in by scanning a QR code with the Smart Life or Tuya Smart app, "
+        "or through a Tuya IoT Platform cloud project (--access-id)",
     )
     command.add_argument("-u", "--user-code", help=USER_CODE_HINT)
     command.add_argument(
         "--force", action="store_true", help="log in again even if a session exists"
     )
-    add("logout", logout, "Revoke the login and delete saved keys")
+    project = command.add_argument_group("with a cloud project instead of a QR code")
+    project.add_argument("--access-id", help="the project's Access ID")
+    project.add_argument("--access-secret", help="the project's Access Secret (asked if omitted)")
+    project.add_argument(
+        "--region", help="the project's data centre: cn, us, us-e, eu, eu-w, in or sg"
+    )
+    account = project.add_mutually_exclusive_group()
+    account.add_argument("--uid", help="UID of the app account linked to the project")
+    account.add_argument("--device-id", help="or the id of any one of that account's devices")
+    add("logout", logout, "Delete the saved login and keys (a QR login is also revoked)")
     command = add("devices", devices, "List devices")
     command.add_argument(
         "--refresh", action="store_true", help="ask the cloud again and rescan the LAN"

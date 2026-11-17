@@ -12,16 +12,23 @@ from pathlib import Path
 from typing import Any
 
 from . import cloud as cloud_api
-from .cloud import Record, Scene
+from . import developer
+from .cloud import Record, Scene, Session
 from .device import Device
 from .errors import CloudError, DeviceNotFound, LanError, NotLoggedIn, TuyaError
 from .lan import LanAddress, discover, probe_version
 
 _LOGGER = logging.getLogger(__name__)
 
+# The cloud behind either kind of login.
+_Cloud = cloud_api.Cloud | developer.DeveloperCloud
+
 
 class Tuya:
     """A Smart Life / Tuya Smart account and its devices.
+
+    The account is reached by QR code (`login`) or through a Tuya IoT Platform
+    cloud project it is linked to (`login_developer`).
 
     State lives in `home` (default ``~/.libtuya``, or ``$LIBTUYA_HOME``):
     ``session.json`` holds the login and ``devices.json`` the device list with
@@ -46,7 +53,7 @@ class Tuya:
         self.home = Path(home or os.environ.get("LIBTUYA_HOME") or Path.home() / ".libtuya")
         self.cloud_fallback = cloud_fallback
         self.timeout = timeout
-        self._cloud: cloud_api.Cloud | None = None
+        self._cloud: _Cloud | None = None
         self._devices: list[Device] | None = None
         self._home_ids: list[str] = []
         self._lock = threading.RLock()  # guards the device list
@@ -55,7 +62,8 @@ class Tuya:
 
     @property
     def logged_in(self) -> bool:
-        return "token_info" in self._read("session.json")
+        session = self._read("session.json")
+        return "token_info" in session or developer.is_session(session)
 
     def login(
         self,
@@ -86,14 +94,48 @@ class Tuya:
             except CloudError as err:  # a network blip should not end the wait
                 session, waiting = None, str(err)
             if session:
-                self._write("session.json", session)
-                self._cloud = None
+                self._logged_in(session)
                 return
             time.sleep(interval)
         raise CloudError(f"the QR code was not scanned and approved in time ({waiting})")
 
+    def login_developer(
+        self, access_id: str, access_secret: str, region: str, *, uid: str = "", device_id: str = ""
+    ) -> None:
+        """Log in through a Tuya IoT Platform cloud project instead of by QR code.
+
+        `access_id` and `access_secret` are the project's, `region` its data
+        centre: cn, us, us-e, eu, eu-w, in or sg. The project's token does not
+        say whose devices to list, so give the `uid` of the app account linked
+        to the project, or the `device_id` of any one of its devices. All of
+        it is checked against the cloud before anything is saved.
+
+        Scenes, `subscribe` and camera streams are not available with this login.
+        """
+        self._logged_in(
+            developer.login(access_id, access_secret, region, uid=uid, device_id=device_id)
+        )
+
+    def _logged_in(self, session: Session) -> None:
+        """Save a new login.
+
+        The device list saved under the previous one is dropped, so the next
+        `devices()` asks the cloud; where the devices were on the LAN is kept.
+        """
+        with self._lock:
+            self._write("session.json", session)
+            if lan := self._read("devices.json").get("lan"):
+                self._write("devices.json", {"lan": lan})
+            else:
+                (self.home / "devices.json").unlink(missing_ok=True)
+            self._cloud = self._devices = None
+            self._home_ids = []
+
     def logout(self) -> None:
-        """Revoke the login and delete the saved session and device list."""
+        """Delete the saved session and device list, and revoke a QR login at Tuya.
+
+        A developer login has nothing to revoke: the project's Access Secret stays valid.
+        """
         if self.logged_in:
             try:
                 self.cloud.logout()
@@ -109,16 +151,19 @@ class Tuya:
         self._home_ids = []
 
     @property
-    def cloud(self) -> cloud_api.Cloud:
+    def cloud(self) -> _Cloud:
         """The account's cloud connection; raises NotLoggedIn without a saved login."""
         with self._lock:
             if self._cloud is None:
                 session = self._read("session.json")
-                if "token_info" not in session:
+                if developer.is_session(session):
+                    self._cloud = developer.DeveloperCloud(session)
+                elif "token_info" in session:
+                    self._cloud = cloud_api.Cloud(
+                        session, lambda updated: self._write("session.json", updated)
+                    )
+                else:
                     raise NotLoggedIn("not logged in; run `tuya login`")
-                self._cloud = cloud_api.Cloud(
-                    session, lambda updated: self._write("session.json", updated)
-                )
             return self._cloud
 
     # -- devices ----------------------------------------------------------
@@ -290,7 +335,7 @@ class Tuya:
             raise CloudError(f"the cloud no longer lists {device.name}")
         device._merge_cloud(fresh)
 
-    def _fall_back(self, device: Device, reason: TuyaError, call: Callable[..., Any]) -> Any:
+    def _fall_back(self, device: Device, reason: TuyaError, call: Callable[[_Cloud], Any]) -> Any:
         """Do through the cloud what the LAN could not; `reason` is raised if that is not on."""
         if not self.cloud_fallback:
             raise reason
@@ -302,7 +347,7 @@ class Tuya:
                 raise
             raise reason from None
 
-    def _ask_cloud(self, call: Callable[[cloud_api.Cloud], Any]) -> Any:
+    def _ask_cloud(self, call: Callable[[_Cloud], Any]) -> Any:
         """Run a cloud call, reading the saved login again if it has gone stale.
 
         Refresh tokens are single-use: when another process sharing this home
@@ -340,6 +385,10 @@ class Tuya:
         """
         with self._lock:
             saved = {device.id: device for device in self._known()}
+            # The saved addresses too: after a new login they are all that is left of the list.
+            lan = self._read("devices.json").get("lan", {})
+            addresses = {dev_id: LanAddress(**address) for dev_id, address in lan.items()}
+            addresses |= {dev_id: d.address for dev_id, d in saved.items() if d.address}
             records = self._ask_cloud(lambda cloud: cloud.devices())
             if saved and not records and not accept_empty:
                 # More likely a fault on the cloud's side than every device gone.
@@ -350,7 +399,7 @@ class Tuya:
                 old = saved.get(record["id"])
                 if old is not None:
                     _keep_description(record, old.record)
-                devices.append(Device(self, record, old.address if old else None))
+                devices.append(Device(self, record, addresses.get(record["id"])))
             if saved:
                 _log_changes(saved, devices)
             self._devices = devices
@@ -379,9 +428,10 @@ class Tuya:
 
     def _read(self, name: str) -> dict[str, Any]:
         try:
-            return json.loads((self.home / name).read_text())
+            data = json.loads((self.home / name).read_text())
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
+        return data if isinstance(data, dict) else {}
 
     def _write(self, name: str, data: dict[str, Any]) -> None:
         """Write atomically and privately: these files hold tokens and local keys.

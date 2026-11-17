@@ -6,7 +6,7 @@ class TuyaError(Exception):
 
 
 class NotLoggedIn(TuyaError):
-    """No saved Smart Life session; run `tuya login` or `Tuya.login()`."""
+    """No usable saved login; run `tuya login`, `Tuya.login()` or `Tuya.login_developer()`."""
 
 
 class DeviceNotFound(TuyaError):
