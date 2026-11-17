@@ -149,6 +149,13 @@ def test_an_unusable_session_is_no_login(cloud, tuya, session):
     assert cloud.calls == []
 
 
+def test_a_listing_says_what_it_lacks(cloud):
+    cloud.routes[SPEC] = refused(2009, "not support this device")
+    assert DeveloperCloud(SESSION).devices()[-1]["incomplete"] == ["specification"]
+    cloud.routes[LIST] = ok([])  # an empty account is the client's to accept or refuse
+    assert DeveloperCloud(SESSION).devices() == []
+
+
 def test_a_token_called_expired_is_replaced(cloud):
     cloud.routes[LIST] = [refused(1010, "token is expired"), ok([canned.PLUG])]
     developer = DeveloperCloud(SESSION)
@@ -168,7 +175,8 @@ def test_from_login_to_the_lan(cloud, tuya, make_device):
             tuya.login_developer(SESSION["access_id"], SECRET, "AY", uid=canned.UID)
         assert cloud.calls == []
         tuya.login_developer(SESSION["access_id"], SECRET, "EU", device_id=PLUG_ID)
-        assert json.loads((tuya.home / "session.json").read_text()) == SESSION
+        saved = json.loads((tuya.home / "session.json").read_text())
+        assert saved.pop("login_id") and saved == SESSION
         # The list is this login's, and the bulb keeps the address saved with the earlier one.
         assert [device.address for device in tuya.devices()] == [address, None]
 

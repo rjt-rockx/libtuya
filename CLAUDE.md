@@ -36,7 +36,7 @@ Python 3.13+ (required by `tuya-device-handlers`).
 
 ## Layout
 
-- `libtuya/client.py` — `Tuya`: saved login, saved device list, lookups, LAN scans. Only module that touches disk.
+- `libtuya/client.py` — `Tuya`: saved login, saved device list, lookups, LAN scans. Only module that reads or writes the state directory.
 - `libtuya/cloud.py` — the QR login and all its traffic to Tuya's servers; device records for the cache.
 - `libtuya/developer.py` — the same for a developer project, through TinyTuya's `Cloud`; maps a datapoint for the LAN only where the device's thing model confirms it.
 - `libtuya/lan.py` — discovery and `Connection` (one TinyTuya session, locked, errors as exceptions).
@@ -52,7 +52,7 @@ Python 3.13+ (required by `tuya-device-handlers`).
 
 ## Rules of the road
 
-- **Everything above `device.py` speaks cloud terms** (DP codes, cloud-format values). Only `dpmap.py` and `lan.py` know datapoint ids and raw values.
+- **Everything above `device.py` speaks cloud terms** (DP codes, cloud-format values). Only `dpmap.py` and `lan.py` handle datapoint ids and raw values at run time; `cloud.py` and `developer.py` only build the map.
 - **Do not guess datapoint ids or invent device tables.** If the cloud gives no map for a device, it is controlled through the cloud.
 - **`libtuya/data/ha_tuya.json` is generated.** Change `scripts/gen_ha_tables.py` or re-sync; a test fails if the file and the vendored source disagree.
 - **The handlers and SDK pins in `pyproject.toml` follow the vendored Home Assistant release's `manifest.json`.** The generated tables reference handler classes by name.
@@ -64,5 +64,7 @@ Python 3.13+ (required by `tuya-device-handlers`).
 ## What cannot be tested here
 
 The cloud (login, device listing, cloud commands) and physical devices. Cloud
-code is exercised against HTTP-level fakes with the real SDKs on top; say so
-when a change depends on live behaviour.
+code is exercised partly against HTTP-level fakes under the real SDKs
+(`tests/fake_cloud.py`, `tests/fake_openapi.py`) and partly with the SDK's
+objects replaced (`tests/test_client.py`); revoking a QR login is untested. Say
+so when a change depends on live behaviour.

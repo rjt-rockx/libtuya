@@ -186,6 +186,7 @@ def test_login_stores_the_session_as_the_cloud_gave_it(tuya: Tuya, monkeypatch):
     # `t` and `expire_time` must reach the SDK untouched: it derives the
     # expiry from them, and a converted value stops tokens being refreshed.
     saved = json.loads((tuya.home / "session.json").read_text())
+    assert saved.pop("login_id")  # tells this login from a later one
     assert saved == SESSION | {"token_info": NEW_TOKEN, "client_id": cloud_module.CLIENT_ID}
 
     monkeypatch.setattr(
@@ -389,7 +390,12 @@ def test_an_empty_answer_does_not_replace_the_saved_devices(tuya, cloud, monkeyp
     with pytest.raises(CloudError, match="listed no devices"):
         tuya.devices(refresh=True)
     assert [(d.id, d.address) for d in Tuya(tuya.home).devices()] == [(BULB, address), (PLUG, None)]
+    # Right after a new login only the addresses are saved; an empty answer keeps them too.
+    tuya._logged_in(tuya._read("session.json"))
+    with pytest.raises(CloudError, match="kept the saved LAN addresses"):
+        tuya.devices(refresh=True)
     assert tuya.devices(refresh=True, accept_empty=True) == []
+    assert tuya._read("devices.json") == {"lan": {BULB: vars(address)}}
 
 
 def test_a_malformed_datapoint_relation_costs_only_that_datapoint(tuya, cloud, caplog):
@@ -397,3 +403,10 @@ def test_a_malformed_datapoint_relation_costs_only_that_datapoint(tuya, cloud, c
     plug = tuya.devices()[1]
     assert plug.dp_map.dp_ids == sorted(int(dp) for dp in record(PLUG)["local_strategy"])
     assert "incomplete" not in plug.record and "WARNING" not in caplog.text
+
+
+def test_a_replaced_login_does_not_come_back(logged_in: Tuya):
+    old = logged_in.cloud
+    logged_in._logged_in(SESSION | {"user_code": "someone else"})
+    old._manager.listener.update_token(NEW_TOKEN)  # the old login's SDK renews its tokens
+    assert logged_in._read("session.json")["user_code"] == "someone else"

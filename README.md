@@ -13,7 +13,7 @@ lamp.entity("light", Light).turn_on(brightness=128, color_temp_kelvin=3000)
 
 heater = tuya.device("Bedroom heater").entity("climate", Climate)
 heater.set_hvac_mode("heat")
-heater.set_temperature(21.5)
+heater.set_temperature(21)
 print(heater.current_temperature, heater.hvac_modes)
 ```
 
@@ -92,6 +92,7 @@ tuya = Tuya()  # Tuya(home=None, *, cloud_fallback=True, timeout=5.0)
 for device in tuya.devices():  # the saved list; devices(refresh=True) asks the cloud again
     print(device.name, device.category, device.product_name)
 
+tuya.saved_devices()  # the saved list only: never asks the cloud or scans
 plug = tuya.device("Desk plug")  # or tuya.device(3): the number `tuya devices` shows
 plug.refresh()  # read the device; returns its status by DP code
 plug.status  # {"switch_1": True, "cur_power": 143, ...}
@@ -112,8 +113,8 @@ with lamp.connected():
 
 ### Entities
 
-A device is a set of entities, exactly the ones Home Assistant creates for
-it. Each kind has a class with Home Assistant's properties, actions and
+A device is a set of entities, the ones Home Assistant creates for it
+(less any with nothing to read or write). Each kind has a class with Home Assistant's properties, actions and
 units: brightness 0-255, positions and percentages 0-100 (100 is open),
 colour as hue 0-360 and saturation 0-100.
 
@@ -158,7 +159,8 @@ would show (its state and attributes), `describe()` lists each underlying
 attribute with its value, unit, limits and choices, and `set(**attributes)`
 writes them. An action sends the same commands Home Assistant's entity
 would, in one call. Where Home Assistant would quietly drop or convert an
-argument the device cannot use, libtuya raises instead.
+argument the device cannot use, libtuya raises instead; values are still
+rounded to the device's step, as there.
 
 Values are as of the last `refresh()`, write or push; before any, they are
 the ones saved with the device list.
@@ -166,7 +168,7 @@ the ones saved with the device list.
 ### Live updates
 
 ```python
-for changed in plug.watch():  # blocks; the device's own pushes over the LAN
+for changed in plug.watch():  # blocks; the full status first, then each change
     print(changed)  # {"cur_power": 131}
 
 stop = tuya.subscribe(lambda device, changed: print(device.name, changed))
@@ -196,8 +198,9 @@ Failures raise subclasses of `libtuya.TuyaError`: `NotLoggedIn`,
 A write that may have reached the device without being acknowledged raises
 `LanError` rather than being repeated through the cloud, because repeating a
 one-shot command ("feed now") could run it twice. With
-`Tuya(cloud_fallback=False)` the cloud is not used once the device list is
-saved.
+`Tuya(cloud_fallback=False)` a device the LAN cannot serve raises instead of
+going through the cloud; refreshing the device list, scenes, `subscribe()`
+and stream URLs still use it.
 
 The API is synchronous, because TinyTuya and the sharing SDK are. From
 asyncio use `await asyncio.to_thread(lamp.turn_on)`. Calls on one device are
@@ -226,7 +229,7 @@ tuya control blinds position 40       # also: open, close, stop
 tuya control robot return_to_base     # also: start, pause, locate, press, arm_away ...
 tuya set heater climate set_temperature=21.5
 tuya set plug countdown_1 60 --raw    # a raw DP code, unscaled
-tuya watch plug                       # changes as the device reports them
+tuya watch plug                       # the status, then changes as the device reports them
 tuya listen                           # changes of every device, from the cloud
 tuya scenes
 tuya scene "Good night"
@@ -234,7 +237,7 @@ tuya scan
 tuya locate lamp 192.168.4.20
 ```
 
-Every command takes `--json`; `tuya --local ...` never uses the cloud; `-v`
+Every command takes `--json`; `tuya --local ...` never falls back to the cloud; `-v`
 shows what happens.
 
 ## With a developer project
@@ -273,8 +276,9 @@ Compared with the app login:
   `tuya -v devices --refresh`. The rest is written through the cloud and
   read from it when the device list is refreshed or the LAN fails.
 - Counters that report increments (energy) read as plain values.
-- Cloud requests count against the trial's quota: a refresh makes two per
-  kind of device, and a device that answers on the LAN makes none. TinyTuya
+- Cloud requests count against the trial's quota: a refresh makes one for
+  the list and two per kind of device, and a device that answers on the LAN
+  makes none. TinyTuya
   sends them without a timeout.
 - `logout` only deletes the saved files; the Access Secret stays valid.
 
@@ -298,8 +302,8 @@ Compared with the app login:
   yet.
 - **The cloud is flaky at times.** A refresh that fails, or describes a
   device only in part, keeps what was saved (`tuya devices` marks such a
-  device with `*`). Cloud requests time out after 5 s connecting and 30 s
-  waiting, and network errors name the host.
+  device with `*`). Network errors name the host; with the app login,
+  requests time out after 5 s connecting and 30 s waiting.
 - **Thermostats work in Celsius**, also one set to Fahrenheit; a temperature
   sensor reads in the device's own unit (`Sensor.unit`).
 - **Not covered**: infrared and RF remotes, and devices for which the cloud

@@ -26,6 +26,7 @@ import re
 import threading
 from collections.abc import Callable, Collection
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 import tinytuya
@@ -108,7 +109,9 @@ def login(
         if not (owner and isinstance(owner, str)):
             raise CloudError("looking up the account: unexpected response from the Tuya cloud")
         session["uid"] = owner
-    cloud._list()  # answers only if id, secret, region, uid and the account's link all fit
+    # Answers only if id, secret, region, uid and the account's link all fit.
+    if not cloud._list():
+        raise CloudError(f"listing devices: the project sees no devices; {_SETUP}")
     return session
 
 
@@ -134,6 +137,7 @@ class DeveloperCloud:
         # By product: what the cloud says of one device holds for every device of its kind.
         specs: dict[str, _Spec] = {}
         models: dict[str, _Model] = {}
+        unspecified: set[str] = set()  # products the cloud gave no specification for
         records = []
         try:
             for item in self._list():
@@ -143,11 +147,15 @@ class DeveloperCloud:
                     spec = self._optional(item, "specification", _specification, _PROJECT_WIDE)
                     if spec is not None:
                         specs[product] = spec
+                    else:
+                        unspecified.add(product)
                 if product not in models:
                     model = self._optional(item, "thing model", _model)
                     if model is not None:
                         models[product] = model
                 records.append(_record(item, specs.get(product, {}), models.get(product, {})))
+                if product in unspecified:  # the saved description, if any, is kept
+                    records[-1]["incomplete"] = ["specification"]
                 if new and (codes := _cloud_only(records[-1])):
                     name = item.get("product_name") or product
                     _LOGGER.info("%s: left to the cloud: %s", name, ", ".join(codes))
@@ -195,8 +203,7 @@ class DeveloperCloud:
 
     def _list(self) -> list[dict[str, Any]]:
         path = f"/v1.0/users/{self._session['uid']}/devices"
-        if not (items := self._get("listing devices", path, shape=list)):
-            raise CloudError(f"listing devices: the project sees no devices; {_SETUP}")
+        items: list[dict[str, Any]] = self._get("listing devices", path, shape=list)
         return items
 
     def _optional(
@@ -248,9 +255,13 @@ class DeveloperCloud:
                 )
                 reply = api.cloudrequest(path, post=post)
             except requests.RequestException as err:
-                # Not the exception's own text: it quotes the URL.
+                # The host only, not the exception's own text: that quotes the URL.
+                url = err.request.url if err.request is not None else None
+                host = urlsplit(str(url)).hostname if url else None
                 kind = type(err).__name__
-                raise CloudError(f"{action}: cannot reach the Tuya cloud ({kind})") from err
+                raise CloudError(
+                    f"{action}: cannot reach {host or 'the Tuya cloud'} ({kind})"
+                ) from err
             except (AttributeError, KeyError, TypeError) as err:
                 # TinyTuya trips over a token reply of an unexpected shape.
                 raise CloudError(f"{action}: unexpected response from the Tuya cloud") from err

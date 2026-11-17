@@ -229,17 +229,26 @@ class Device:
                 held.close()
 
     def watch(self) -> Iterator[dict[str, Any]]:
-        """Yield status changes pushed by the device over the LAN, forever.
+        """Yield the device's status over the LAN, then each change, forever.
 
-        Holds a connection open, which most devices allow only one of. Raises
-        LanError when the connection is lost; start again to resume.
+        The first item is the full current status by DP code; after that only
+        what changed, as the device pushes it (the status is also re-read every
+        30 seconds, and differences found then are yielded too). Holds a
+        connection open, which most devices allow only one of. Raises LanError
+        when the connection is lost; start again to resume.
         """
         self._require_map()
         connection = self._connect(persist=True)
+        first = True
         try:
             for dps, pushed in connection.updates():
-                changed = self.dp_map.decode(dps)
-                self.status.update(changed)
+                decoded = self.dp_map.decode(dps)
+                if pushed or first:
+                    changed = decoded
+                else:  # a status this side asked for
+                    changed = {c: v for c, v in decoded.items() if self.status.get(c) != v}
+                first = False
+                self.status.update(decoded)
                 if pushed:  # as opposed to a status this side asked for
                     now = time.monotonic_ns()
                     for entity in self.entities:

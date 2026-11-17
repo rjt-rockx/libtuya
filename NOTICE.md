@@ -35,6 +35,7 @@ Installed from PyPI, not copied.
 | [tuya-device-sharing-sdk](https://github.com/tuya/tuya-device-sharing-sdk) | MIT | Smart Life QR login, device list, value conversions |
 | [tuya-device-handlers](https://github.com/home-assistant-libs/tuya-device-handlers) | MIT | Reading and writing datapoints in friendly units, per-product fixes |
 | [qrcode](https://github.com/lincolnloop/python-qrcode) | BSD | Drawing the login QR code in the terminal |
+| [requests](https://github.com/psf/requests) | Apache-2.0 | HTTP for both cloud logins, through the SDK and TinyTuya; libtuya reads its exception types |
 | [cryptography](https://github.com/pyca/cryptography) | Apache-2.0 or BSD | Needed by the sharing SDK and TinyTuya |
 
 ## Studied, nothing copied

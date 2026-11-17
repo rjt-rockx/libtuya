@@ -264,7 +264,10 @@ class Climate(Entity):
         self.set(swing=swing_mode)
 
     def set_temperature(self, temperature: float) -> None:
-        """Set the target temperature, in `temperature_unit`, from `min_temp` to `max_temp`."""
+        """Set the target temperature, in `temperature_unit`, from `min_temp` to `max_temp`.
+
+        It is rounded to the device's `target_temperature_step`, as Home Assistant does.
+        """
         if "set_temperature" not in self.wrappers:
             raise TuyaError(f"{self.device.name} has no target temperature")
         low, high = self.min_temp, self.max_temp

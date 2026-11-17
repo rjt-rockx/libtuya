@@ -15,6 +15,7 @@ from fake_device import FakeTuyaDevice
 
 from libtuya import Device, LanError, Tuya
 from libtuya import client as client_module
+from libtuya import lan as lan_module
 from libtuya.lan import LanAddress, discover
 
 BULB = "dj_k3okx0w3bsgmindp"  # RGB+white bulb: dps 20 switch, 21 mode, 22 brightness, 24 colour
@@ -192,6 +193,16 @@ def test_watching_pushes(plug):
     on_the_wire.push({"17": 5})
     assert [next(changes), next(changes)] == [{"add_ele": 7}, {"add_ele": 5}]
     assert energy.value == pytest.approx(0.012)  # kWh
+    changes.close()
+
+
+def test_watching_re_reads_report_only_what_changed(plug, monkeypatch):
+    device, on_the_wire = plug
+    monkeypatch.setattr(lan_module, "FULL_STATUS_INTERVAL", 0)  # re-read on every pass
+    changes = device.watch()
+    assert len(next(changes)) > 1  # the full status first
+    on_the_wire.dps["1"] = True  # changed without a push: only a re-read sees it
+    assert next(changes) == {"switch_1": True}
     changes.close()
 
 

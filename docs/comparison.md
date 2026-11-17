@@ -51,7 +51,8 @@ Concretely, compared with using the pieces yourself:
 - **The entities are Home Assistant's, and so is their behaviour.** A test
   checks that for every device fixture in the vendored Home Assistant release
   (329 real devices), libtuya derives the same entities, by unique id, as Home
-  Assistant's own test snapshots. Each kind of entity has a class that
+  Assistant's own test snapshots (it then leaves out the one with nothing to
+  read or write). Each kind of entity has a class that
   follows Home Assistant's (`Light.turn_on(brightness=, color_temp_kelvin=)`,
   `Climate.set_hvac_mode`, `Cover.open`, `Fan.set_percentage` ...), and a
   second test compares what each class shows with the state Home Assistant

@@ -25,7 +25,7 @@ them so that one QR-code login is enough to control devices locally.
 
 | Module | Responsibility |
 |---|---|
-| `client.py` | `Tuya`: the saved login, the saved device list, finding a device by name, LAN scans. The only module that touches disk. |
+| `client.py` | `Tuya`: the saved login, the saved device list, finding a device by name, LAN scans. The only module that reads or writes the state directory. |
 | `cloud.py` | Everything the QR login sends to Tuya's servers, through tuya-device-sharing-sdk. Turns the SDK's device objects into plain records for the cache and back. One lock around every request (the SDK renews its token without one). |
 | `developer.py` | The same for a Tuya developer project, through TinyTuya's `Cloud`, producing the same records. |
 | `lan.py` | Discovery by device id and a `Connection` that wraps one TinyTuya session: explicit errors, a lock, the device22 and protocol 3.2 special cases. |
@@ -92,8 +92,11 @@ Assistant installed.
 
 `entities/base.py` then mirrors the dozen lines each Home Assistant platform
 uses to call the handlers. The result is checked against Home Assistant itself: a
-test builds the entities for every device fixture in the vendored release and
-compares them, device by device, with Home Assistant's own test snapshots.
+test derives the entity descriptions for every device fixture in the vendored
+release and compares them, device by device, with Home Assistant's own test
+snapshots. An entity with nothing to read or write (one climate entity among
+the fixtures) is then left out; cameras are always kept, as Home Assistant
+keeps them.
 
 The handlers version is pinned to the one the vendored Home Assistant release
 uses. The tables reference handler classes by name, and the handlers make no

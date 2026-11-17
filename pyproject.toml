@@ -32,6 +32,8 @@ dependencies = [
     # Imported by tuya-device-sharing-sdk, which does not declare it.
     "cryptography",
     "qrcode>=7",
+    # Used directly for its exception types; installed by the two SDKs anyway.
+    "requests",
 ]
 
 [project.optional-dependencies]

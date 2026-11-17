@@ -64,7 +64,7 @@ def _parse(text: str) -> Any:
 
 def _parse_for(entity: Entity, attribute: str | None, text: str) -> Any:
     """Read a value for an entity attribute; a choice the device offers is taken as typed."""
-    wrapper = entity.wrappers.get(attribute or next(iter(entity.wrappers)))
+    wrapper = entity.wrappers.get(attribute or next(iter(entity.wrappers), ""))
     choices = [str(option) for option in getattr(wrapper, "options", None) or ()]
     return text if text in choices else _parse(text)
 
@@ -372,13 +372,7 @@ def locate(tuya: Tuya, args: argparse.Namespace) -> Result:
 
 
 def health(tuya: Tuya, args: argparse.Namespace) -> Result:
-    # Only what is saved: this command must not log in, fetch or scan. After a login
-    # devices.json can hold LAN addresses and no device list yet.
-    try:
-        saved = json.loads((tuya.home / "devices.json").read_text())
-    except (OSError, ValueError):
-        saved = {}
-    known = tuya.devices() if isinstance(saved, dict) and saved.get("devices") else []
+    known = tuya.saved_devices()  # this command must not log in, fetch or scan
     data = {
         "home": str(tuya.home),
         "logged_in": tuya.logged_in,

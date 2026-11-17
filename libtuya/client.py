@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -123,7 +124,8 @@ class Tuya:
         `devices()` asks the cloud; where the devices were on the LAN is kept.
         """
         with self._lock:
-            self._write("session.json", session)
+            # Tells this login apart from the next: see `cloud`.
+            self._write("session.json", session | {"login_id": uuid.uuid4().hex})
             if lan := self._read("devices.json").get("lan"):
                 self._write("devices.json", {"lan": lan})
             else:
@@ -159,9 +161,15 @@ class Tuya:
                 if developer.is_session(session):
                     self._cloud = developer.DeveloperCloud(session)
                 elif "token_info" in session:
-                    self._cloud = cloud_api.Cloud(
-                        session, lambda updated: self._write("session.json", updated)
-                    )
+                    login_id = session.get("login_id")
+
+                    def save(updated: Session) -> None:
+                        # Renewed tokens of a login that has since been replaced (or
+                        # logged out) must not bring it back.
+                        if self._read("session.json").get("login_id") == login_id:
+                            self._write("session.json", updated)
+
+                    self._cloud = cloud_api.Cloud(session, save)
                 else:
                     raise NotLoggedIn("not logged in; run `tuya login`")
             return self._cloud
@@ -185,13 +193,19 @@ class Tuya:
         """
         with self._lock:
             if refresh or not self._known():
-                self._fetch(accept_empty)
+                if not self._fetch(accept_empty):
+                    self._save()
+                    return []
                 try:
                     self.scan(scan_timeout)
                 except LanError as err:
                     _LOGGER.warning("%s", err)
                     self._save()
             return self._known()
+
+    def saved_devices(self) -> list[Device]:
+        """The saved device list, without asking the cloud or scanning; empty if there is none."""
+        return self._known()
 
     def device(self, ref: str | int) -> Device:
         """Find a device by id, name, position in `devices()` (from 1) or part of its name."""
@@ -232,8 +246,7 @@ class Tuya:
         Raises LanError if it does not answer.
         """
         address = probe_version(device.id, device.local_key, ip, version, self.timeout)
-        device._moved(address)
-        self._save()
+        self._move(device, address)
         return address
 
     def gateway_of(self, device: Device) -> Device | None:
@@ -324,9 +337,17 @@ class Tuya:
             return False
         if found is None or found == target.address:
             return False
-        target._moved(found)
-        self._save()
+        self._move(target, found)
         return True
+
+    def _move(self, device: Device, address: LanAddress) -> None:
+        """Record a device's new address, also on the list in use if `device` is older."""
+        with self._lock:
+            device._moved(address)
+            for current in self._devices or ():
+                if current.id == device.id and current is not device:
+                    current._moved(address)
+            self._save()
 
     def _cloud_send(
         self, device: Device, commands: list[dict[str, Any]], reason: TuyaError
@@ -394,10 +415,10 @@ class Tuya:
             addresses = {dev_id: LanAddress(**address) for dev_id, address in lan.items()}
             addresses |= {dev_id: d.address for dev_id, d in saved.items() if d.address}
             records = self._ask_cloud(lambda cloud: cloud.devices())
-            if saved and not records and not accept_empty:
+            if (saved or addresses) and not records and not accept_empty:
                 # More likely a fault on the cloud's side than every device gone.
-                kept = f"kept the {len(saved)} saved ones"
-                raise CloudError(f"the Tuya cloud listed no devices; {kept}")
+                kept = f"the {len(saved)} saved ones" if saved else "the saved LAN addresses"
+                raise CloudError(f"the Tuya cloud listed no devices; kept {kept}")
             devices = []
             for record in records:
                 old = saved.get(record["id"])
@@ -421,6 +442,8 @@ class Tuya:
     def _save(self) -> None:
         with self._lock:
             devices = self._devices or []
+            if not devices and "devices" not in self._read("devices.json"):
+                return  # nothing listed since a login; keep the LAN addresses kept from before
             self._write(
                 "devices.json",
                 {
