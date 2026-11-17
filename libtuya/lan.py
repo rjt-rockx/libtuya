@@ -102,6 +102,8 @@ class Connection:
         timeout: float = 5.0,
     ) -> None:
         self._dp_ids = [str(dp_id) for dp_id in dp_ids]
+        self._lock: threading.Lock
+        self._device: tinytuya.Device
         self._parent = parent
         self._cid = cid
         self._by_id = False

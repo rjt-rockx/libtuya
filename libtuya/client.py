@@ -243,12 +243,14 @@ class Tuya:
             try:
                 data = message.get("data") or {}
                 if message.get("protocol") == cloud_api.REPORT:
-                    device = devices.get(data.get("devId"))
-                    changed = device._apply_report(data.get("status") or ()) if device else {}
+                    device = devices.get(str(data.get("devId")))
+                    if device is None:
+                        return
+                    changed = device._apply_report(data.get("status") or ())
                     if not changed:
                         return
                 elif (kind := data.get("bizCode")) in ("online", "offline"):
-                    device = devices.get((data.get("bizData") or {}).get("devId"))
+                    device = devices.get(str((data.get("bizData") or {}).get("devId")))
                     if device is None:
                         return
                     device.info.online, changed = kind == "online", {}

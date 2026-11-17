@@ -90,7 +90,7 @@ def _errors(action: str) -> Iterator[None]:
     except requests.RequestException as err:
         # The host only: the URL and the exception's own text hold the user code.
         url = err.request.url if err.request is not None else None
-        host = urlsplit(url).hostname if url else None
+        host = urlsplit(str(url)).hostname if url else None
         reason = type(err).__name__
         raise CloudError(f"{action}: cannot reach {host or 'the Tuya cloud'} ({reason})") from err
     except TuyaSDKException as err:

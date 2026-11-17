@@ -185,7 +185,7 @@ class Device:
             dps = self.dp_map.encode(commands)
             reported = self._over_lan(lambda connection: connection.set(dps))
         except (LanError, Unmapped) as err:
-            if getattr(err, "code", None) in _UNCONFIRMED:
+            if isinstance(err, LanError) and err.code in _UNCONFIRMED:
                 # Sending it again through the cloud could run it twice, which
                 # matters for one-shot commands such as "feed now".
                 raise LanError(
