@@ -290,6 +290,16 @@ def test_cloud_push_reaches_subscribers(logged_in: Tuya):
     ]
     assert bulb.entity("light").state()["color_data"] == pytest.approx((120, 100, 127.5))
     assert (plug.status["switch_1"], plug.online) == (True, False)
+
+    # A refresh replaces the Device objects; pushes go on reaching the ones in use.
+    _, plug = logged_in.devices(refresh=True)
+    queue.deliver(
+        {
+            "protocol": 4,
+            "data": {"devId": PLUG, "status": [{"code": "switch_1", "value": False, "t": 3}]},
+        }
+    )
+    assert seen[-1] == (plug.name, {"switch_1": False}) and plug.status["switch_1"] is False
     stop()
     assert not queue.running
 

@@ -129,8 +129,9 @@ def test_an_answer_without_any_status_is_not_taken_for_one(make_device, tuya):
         assert device.transport == "cloud"
 
 
-def test_a_command_nobody_acknowledged_is_sent_once(make_device, tuya):
-    """Neither TinyTuya's retries nor the cloud may repeat it: it could be "feed the cat"."""
+def test_a_command_nobody_acknowledged_is_sent_once(make_device, tuya, monkeypatch):
+    """Neither TinyTuya's retries, nor a new address, nor the cloud may repeat it: it could be
+    "feed the cat"."""
     tuya.timeout = 0.3
     tuya._cloud = cloud = StubCloud()
     received = []
@@ -145,13 +146,15 @@ def test_a_command_nobody_acknowledged_is_sent_once(make_device, tuya):
         except OSError:
             pass  # the server was closed
 
-    with socket.create_server(("127.0.0.1", 0)) as server:
+    with socket.create_server(("127.0.0.1", 0)) as server, fake(PLUG, "3.3") as elsewhere:
         threading.Thread(target=swallow, args=(server,), daemon=True).start()
         device = make_device(PLUG, LanAddress("127.0.0.1", "3.3", server.getsockname()[1]))
+        moved = LanAddress("127.0.0.1", "3.3", elsewhere.port)
+        monkeypatch.setattr(client_module, "discover", lambda keys, timeout: {PLUG: moved})
         with pytest.raises(LanError, match="may or may not"):
             device.turn_on()
     assert b"".join(received).count(bytes.fromhex("000055aa")) == 1
-    assert cloud.sent == []
+    assert elsewhere.received == [] and cloud.sent == []
 
 
 def test_a_wrong_local_key_is_reported(make_device, tuya):

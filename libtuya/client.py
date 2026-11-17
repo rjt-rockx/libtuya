@@ -282,20 +282,24 @@ class Tuya:
         This works for devices that are not on the LAN too. For one device on
         the LAN, `Device.watch` gets the same without the cloud.
         """
-        devices = {device.id: device for device in self.devices()}
+        devices = self.devices()
+
+        def current(dev_id: Any) -> Device | None:
+            # The list in use now: devices(refresh=True) replaces the Device objects.
+            return next((d for d in self._devices or devices if d.id == dev_id), None)
 
         def on_message(message: dict[str, Any]) -> None:
             try:
                 data = message.get("data") or {}
                 if message.get("protocol") == cloud_api.REPORT:
-                    device = devices.get(str(data.get("devId")))
+                    device = current(data.get("devId"))
                     if device is None:
                         return
                     changed = device._apply_report(data.get("status") or ())
                     if not changed:
                         return
                 elif (kind := data.get("bizCode")) in ("online", "offline"):
-                    device = devices.get(str((data.get("bizData") or {}).get("devId")))
+                    device = current((data.get("bizData") or {}).get("devId"))
                     if device is None:
                         return
                     device.info.online, changed = kind == "online", {}
@@ -305,7 +309,7 @@ class Tuya:
             except Exception:  # must not take the SDK's network thread down
                 _LOGGER.exception("Error while handling a pushed message")
 
-        subscribed = [(d.id, bool(d.record.get("support_local"))) for d in devices.values()]
+        subscribed = [(d.id, bool(d.record.get("support_local"))) for d in devices]
         homes = self._homes()
         return self._ask_cloud(lambda cloud: cloud.listen(subscribed, homes, on_message))
 

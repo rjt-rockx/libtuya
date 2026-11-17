@@ -183,7 +183,7 @@ class Device:
             return
         try:
             dps = self.dp_map.encode(commands)
-            reported = self._over_lan(lambda connection: connection.set(dps))
+            reported = self._over_lan(lambda connection: connection.set(dps), write=True)
         except (LanError, Unmapped) as err:
             if isinstance(err, LanError) and err.code in _UNCONFIRMED:
                 # Sending it again through the cloud could run it twice, which
@@ -300,14 +300,19 @@ class Device:
             # time, and that way follows its gateway to a new address.
             return self._connection or self._connect(key=key)
 
-    def _over_lan(self, call: Callable[[Connection], dict[str, Any]]) -> dict[str, Any]:
+    def _over_lan(
+        self, call: Callable[[Connection], dict[str, Any]], write: bool = False
+    ) -> dict[str, Any]:
         self._require_map()
         try:
             result = call(self._lan_connection())
         except LanError as err:
             # Whatever went wrong on the connection, the device may simply have
             # a new IP address (and another device its old one): look once.
+            # Not after a write that may have arrived: it would run twice.
             if err.code is None or not self._may_relocate:
+                raise
+            if write and err.code in _UNCONFIRMED:
                 raise
             self._may_relocate = False
             if not self._client._relocate(self):

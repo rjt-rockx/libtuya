@@ -279,10 +279,11 @@ def control(tuya: Tuya, args: argparse.Namespace) -> Result:
             hue, saturation, brightness = colorsys.rgb_to_hsv(red, green, blue)
             light().turn_on(hs_color=(hue * 360, saturation * 100), brightness=brightness * 255)
         elif action == "temperature":
-            # Degrees for a thermostat; kelvin for a light, or when a light is named.
-            climate = [e for e in device.entities if isinstance(e, Climate)]
-            if climate and not args.entity:
-                climate[0].set_temperature(number())
+            # Degrees for a thermostat, kelvin for a light: the one named, else a thermostat.
+            climate = (e for e in device.entities if isinstance(e, Climate))
+            target = device.entity(args.entity) if args.entity else next(climate, None)
+            if isinstance(target, Climate):
+                target.set_temperature(number())
             else:
                 light().turn_on(color_temp_kelvin=round(number()))
         else:
