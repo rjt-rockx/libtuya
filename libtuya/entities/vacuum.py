@@ -22,11 +22,6 @@ class Vacuum(Entity):
     the others raise TuyaError.
     """
 
-    def _read(self, attribute: str) -> Any:
-        """An attribute's value; None if the vacuum lacks it or does not report it."""
-        wrapper = self.wrappers.get(attribute)
-        return None if wrapper is None else wrapper.read_device_status(self.device.info)
-
     @property
     def activity(self) -> str | None:
         """What the vacuum is doing; None if it does not say.

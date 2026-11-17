@@ -61,7 +61,8 @@ def build_entities(device: Device) -> list[Entity]:
         )
         for platform, description, definition in definitions(device.info)
     ]
-    return [entity for entity in entities if entity.wrappers]
+    # Home Assistant gives every camera an entity, even with nothing to read.
+    return [entity for entity in entities if entity.wrappers or entity.platform == "camera"]
 
 
 __all__ = [

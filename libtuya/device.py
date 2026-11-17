@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 from .cloud import Record, load_device
 from .dpmap import DpMap
@@ -89,8 +89,24 @@ class Device:
     def entities(self) -> list[Entity]:
         return build_entities(self)
 
-    def entity(self, ref: str) -> Entity:
-        """Find an entity by id (``light.switch_led``), key, platform or name."""
+    @overload
+    def entity(self, ref: str) -> Entity: ...
+    @overload
+    def entity[E: Entity](self, ref: str, kind: type[E]) -> E: ...
+    def entity(self, ref: str, kind: type[Entity] = Entity) -> Entity:
+        """Find an entity by id (``light.switch_led``), key, platform or name.
+
+        With `kind` (``device.entity("light", Light)``) it must be of that
+        class, which also tells a type checker what comes back.
+        """
+        found = self._find_entity(ref)
+        if not isinstance(found, kind):
+            raise TuyaError(
+                f"{found.id} of {self.name} is a {type(found).__name__}, not a {kind.__name__}"
+            )
+        return found
+
+    def _find_entity(self, ref: str) -> Entity:
         ref_lower = ref.lower()
         for matches in (
             lambda e: e.id == ref,
@@ -225,8 +241,9 @@ class Device:
                 changed = self.dp_map.decode(dps)
                 self.status.update(changed)
                 if pushed:  # as opposed to a status this side asked for
+                    now = time.monotonic_ns()
                     for entity in self.entities:
-                        entity._note_push(list(changed), time.monotonic_ns())
+                        entity._note_push(dict.fromkeys(changed, now))
                 if changed:
                     yield changed
         finally:
@@ -314,14 +331,20 @@ class Device:
     def _apply_report(self, items: Any) -> dict[str, Any]:
         """Apply a status report pushed through the cloud; returns what changed, by DP code."""
         changed: dict[str, Any] = {}
+        timestamps: dict[str, int] = {}
         for item in items:
             if "value" not in item:
                 continue
             if "dpId" in item:  # by datapoint id, raw, as on the LAN
-                changed |= self.dp_map.decode({item["dpId"]: item["value"]})
+                decoded = self.dp_map.decode({item["dpId"]: item["value"]})
             elif "code" in item:
-                changed[item["code"]] = item["value"]
+                decoded = {item["code"]: item["value"]}
+            else:
+                continue
+            changed |= decoded
+            # The cloud stamps each report; the same report can arrive twice.
+            timestamps |= dict.fromkeys(decoded, item.get("t") or time.monotonic_ns())
         self.status.update(changed)
         for entity in self.entities:
-            entity._note_push(list(changed), time.monotonic_ns())
+            entity._note_push(timestamps)
         return changed

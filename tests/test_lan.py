@@ -58,7 +58,7 @@ def test_a_light_on_every_protocol_version(bulb):
     assert device.transport == "lan"
     assert light.state()["switch"] is False
 
-    light.turn_on(brightness=128, hs=(120, 100))
+    light.turn_on(brightness=128, hs_color=(120, 100))
 
     # One frame, in the device's own terms: on, colour mode, HSV as hex.
     assert len(on_the_wire.received) == 1

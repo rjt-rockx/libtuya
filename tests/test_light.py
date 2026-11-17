@@ -46,10 +46,14 @@ def light(make_device, monkeypatch):
         (GARAGE, {"brightness": 150}, [ON, level(592)]),
         (GARAGE, {"brightness": 0}, [{"code": "switch_led", "value": False}]),
         (GARAGE, {"white": True, "brightness": 150}, [ON, WHITE, level(592)]),
-        (GARAGE, {"brightness": 255, "hs": (10.1, 20.2)}, [ON, COLOUR, colour(10, 202, 1000)]),
+        (
+            GARAGE,
+            {"brightness": 255, "hs_color": (10.1, 20.2)},
+            [ON, COLOUR, colour(10, 202, 1000)],
+        ),
         (
             TUNABLE,
-            {"brightness": 255, "kelvin": 5000},
+            {"brightness": 255, "color_temp_kelvin": 5000},
             [ON, {"code": "temp_value", "value": 221}, {"code": "bright_value", "value": 255}],
         ),
     ],
@@ -68,20 +72,20 @@ def test_brightness_belongs_to_whatever_is_showing(light):
     assert sent == [[ON, COLOUR, colour(243, 860, 588)]]
     # ... and a colour asked for in white mode takes over the white's brightness.
     entity, sent = light(GARAGE)
-    entity.turn_on(hs=(120, 100))
+    entity.turn_on(hs_color=(120, 100))
     assert sent == [[ON, COLOUR, colour(120, 1000, 541)]]
 
 
 def test_a_light_says_why_it_refuses_and_sends_nothing(light):
     garage, sent = light(GARAGE)
     with pytest.raises(TuyaError, match="no adjustable colour temperature"):
-        garage.turn_on(kelvin=3000)
+        garage.turn_on(color_temp_kelvin=3000)
     with pytest.raises(ValueError, match="only one of"):
-        garage.turn_on(hs=(0, 100), white=True)
+        garage.turn_on(hs_color=(0, 100), white=True)
     with pytest.raises(ValueError, match="level as brightness"):
         garage.turn_on(white=150)  # Home Assistant's other way to say white=True, brightness=150
     with pytest.raises(ValueError, match="hue 0-360"):
-        garage.turn_on(hs=(120, 50, 200))
+        garage.turn_on(hs_color=(120, 50, 200))
     assert sent == []
     with pytest.raises(TuyaError, match="no plain white mode"):
         light(TUNABLE)[0].turn_on(white=True)

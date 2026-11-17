@@ -108,7 +108,7 @@ def test_entities_describe_themselves(make_device):
 def test_a_light_refuses_what_it_cannot_do(make_device):
     dimmer = make_device("dj_bSXSSFArVKtc4DyC").entity("light")
     with pytest.raises(TuyaError, match="no adjustable colour"):
-        dimmer.turn_on(hs=(0, 100))
+        dimmer.turn_on(hs_color=(0, 100))
     bulb = make_device("dj_k3okx0w3bsgmindp").entity("light")
     with pytest.raises(ValueError, match="hue 0-360"):
         bulb.set(color_data=(400, 150, 999))
@@ -126,3 +126,7 @@ def test_bad_requests_are_explained(make_device):
         device.entity("switch.switch_1").set(colour="red")
     with pytest.raises(TuyaError, match="has no entity"):
         device.entity("nope")
+    with pytest.raises(TuyaError, match="nothing to set"):
+        device.entity("switch.switch_1").set()
+    with pytest.raises(TuyaError, match="is a Switch, not a Light"):
+        device.entity("switch.switch_1", Light)

@@ -41,11 +41,6 @@ class Climate(Entity):
     `turn_off()` use the device's switch and leave its mode alone.
     """
 
-    def _read(self, attribute: str) -> Any:
-        """An attribute's value; None if the device lacks it or does not report it."""
-        wrapper = self.wrappers.get(attribute)
-        return None if wrapper is None else wrapper.read_device_status(self.device.info)
-
     def _options(self, attribute: str) -> list[str]:
         """An attribute's choices as plain strings; none if the device lacks it."""
         wrapper = self.wrappers.get(attribute)

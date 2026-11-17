@@ -9,7 +9,7 @@ from libtuya import Tuya
 tuya = Tuya()  # uses the login saved by `tuya login`
 lamp = tuya.device("Living room")
 lamp.turn_on()
-lamp.entity("light").turn_on(brightness=128, kelvin=3000)
+lamp.entity("light").turn_on(brightness=128, color_temp_kelvin=3000)
 ```
 
 It joins three existing pieces and adds only the glue between them:
@@ -92,8 +92,8 @@ plug.entity("sensor.cur_power").value  # 12.7  (scaled, in entity.wrappers[...].
 
 lamp = tuya.device("Living room")
 light = lamp.entity("light")
-light.turn_on(brightness=200, hs=(30, 80))  # brightness 0-255, hue 0-360, saturation 0-100
-light.turn_on(kelvin=2700)
+light.turn_on(brightness=200, hs_color=(30, 80))  # brightness 0-255, hue 0-360, saturation 0-100
+light.turn_on(color_temp_kelvin=2700)
 
 for changed in plug.watch():  # blocks; pushes from the device
     print(changed)

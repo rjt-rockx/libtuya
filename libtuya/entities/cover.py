@@ -24,11 +24,6 @@ class Cover(Entity):
     open and close instructions.
     """
 
-    def _read(self, *attributes: str) -> Any:
-        """The value of the first of these attributes the cover has; None if it has none."""
-        wrapper = next((self.wrappers[name] for name in attributes if name in self.wrappers), None)
-        return None if wrapper is None else wrapper.read_device_status(self.device.info)
-
     @property
     def current_position(self) -> int | None:
         """How far open the cover is, 0 (closed) to 100 (open); None if it does not say.

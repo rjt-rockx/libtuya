@@ -39,8 +39,10 @@ def test_increments_add_up_once_pushes_are_followed(make_device):
     socket = make_device("cz_guitoc9iylae4axs")
     energy = socket.entity("sensor.add_ele")
     assert (energy.value, energy.summary()) == (None, {"state": 0})  # Home Assistant starts at 0
-    socket._apply_report([{"code": "add_ele", "value": 200}])
-    socket._apply_report([{"code": "add_ele", "value": 300}, {"code": "switch_1", "value": True}])
+    socket._apply_report([{"code": "add_ele", "value": 200, "t": 1000}])
+    added = [{"code": "add_ele", "value": 300, "t": 1100}, {"code": "switch_1", "value": True}]
+    socket._apply_report(added)
+    socket._apply_report(added)  # the same report delivered twice counts once
     socket._apply_report([{"code": "switch_1", "value": False}])
     assert (energy.summary(), energy.unit) == ({"state": pytest.approx(0.5)}, "kWh")
 

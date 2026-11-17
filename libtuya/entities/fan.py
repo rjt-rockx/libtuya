@@ -25,11 +25,6 @@ class Fan(Entity):
     value it does not take.
     """
 
-    def _read(self, attribute: str) -> Any:
-        """An attribute's value; None if the fan lacks it or does not report it."""
-        wrapper = self.wrappers.get(attribute)
-        return None if wrapper is None else wrapper.read_device_status(self.device.info)
-
     @property
     def is_on(self) -> bool | None:
         """Whether the fan is switched on; None if unknown."""

@@ -206,14 +206,14 @@ def control(tuya: Tuya, args: argparse.Namespace) -> Result:
                 raise TuyaError("color is given as RRGGBB, for example ff8800")
             red, green, blue = (int(text[index : index + 2], 16) / 255 for index in (0, 2, 4))
             hue, saturation, brightness = colorsys.rgb_to_hsv(red, green, blue)
-            light().turn_on(hs=(hue * 360, saturation * 100), brightness=brightness * 255)
+            light().turn_on(hs_color=(hue * 360, saturation * 100), brightness=brightness * 255)
         elif action == "temperature":
             # Degrees for a thermostat; kelvin for a light, or when a light is named.
             climate = [e for e in device.entities if e.platform == "climate"]
             if climate and not args.entity:
                 climate[0].set(set_temperature=number())
             else:
-                light().turn_on(kelvin=round(number()))
+                light().turn_on(color_temp_kelvin=round(number()))
         else:
             raise TuyaError(f"unknown action {action!r}")
     data = {"device": device.name, "action": action, "value": value, "transport": device.transport}

@@ -212,6 +212,11 @@ class Entity:
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.id} of {self.device.name!r}>"
 
+    def _read(self, *attributes: str) -> Any:
+        """The value of the first of these attributes the entity has; None if it has none."""
+        wrapper = next((self.wrappers[name] for name in attributes if name in self.wrappers), None)
+        return None if wrapper is None else wrapper.read_device_status(self.device.info)
+
     def writable(self, attribute: str) -> bool:
         """Whether an attribute can be set (best effort, from the device's spec)."""
         if self.platform in _READ_ONLY_PLATFORMS:
@@ -284,6 +289,8 @@ class Entity:
         Raises TuyaError for an unknown or read-only attribute and ValueError
         for a value the device does not accept.
         """
+        if value is _UNSET and not attributes:
+            raise TuyaError(f"{self.id}: nothing to set; it has {list(self.wrappers)}")
         if value is not _UNSET:
             if len(self.wrappers) != 1:
                 raise TuyaError(
@@ -344,11 +351,15 @@ class Entity:
             raise TuyaError(f"{self.id} cannot be switched on or off")
         self.set(**{self.on_off: on})
 
-    def _note_push(self, codes: list[str], timestamp: int) -> None:
-        """Tell wrappers that keep a running value about a report pushed by the device."""
+    def _note_push(self, timestamps: dict[str, int]) -> None:
+        """Tell wrappers that keep a running value about a report pushed by the device.
+
+        `timestamps` maps each reported DP code to the time of its report; a
+        report seen twice (same time) is counted once.
+        """
         self._pushed = True
         for wrapper in self.wrappers.values():
-            wrapper.skip_update(self.device.info, codes, dict.fromkeys(codes, timestamp))
+            wrapper.skip_update(self.device.info, list(timestamps), timestamps)
 
 
 def apply_quirks(info: CustomerDevice) -> None:

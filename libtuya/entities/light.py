@@ -70,11 +70,6 @@ class Light(Entity):
     needed, which setting a single attribute with `set` does not.
     """
 
-    def _read(self, attribute: str) -> Any:
-        """Value of an attribute; None if the light lacks it or its value is unknown."""
-        wrapper = self.wrappers.get(attribute)
-        return None if wrapper is None else wrapper.read_device_status(self.device.info)
-
     @property
     def is_on(self) -> bool | None:
         """Whether the light is on; None if unknown."""
@@ -138,12 +133,12 @@ class Light(Entity):
 
     @property
     def min_color_temp_kelvin(self) -> int:
-        """Warmest white `turn_on(kelvin=...)` takes, in kelvin."""
+        """Warmest white `turn_on(color_temp_kelvin=...)` takes, in kelvin."""
         return getattr(self.wrappers.get("color_temp"), "min_kelvin", ColorTempWrapper.MIN_KELVIN)
 
     @property
     def max_color_temp_kelvin(self) -> int:
-        """Coldest white `turn_on(kelvin=...)` takes, in kelvin."""
+        """Coldest white `turn_on(color_temp_kelvin=...)` takes, in kelvin."""
         return getattr(self.wrappers.get("color_temp"), "max_kelvin", ColorTempWrapper.MAX_KELVIN)
 
     def summary(self) -> dict[str, Any]:
@@ -181,53 +176,58 @@ class Light(Entity):
         self,
         *,
         brightness: float | None = None,
-        kelvin: int | None = None,
-        hs: tuple[float, float] | None = None,
+        color_temp_kelvin: int | None = None,
+        hs_color: tuple[float, float] | None = None,
         white: bool = False,
     ) -> None:
         """Turn on, optionally changing what the light shows.
 
         `brightness` is 0-255 and dims whatever is showing; 0 turns the light
-        off. At most one of: `kelvin`, white of that temperature (read back as
-        `color_temp_kelvin`); `hs`, a colour as (hue 0-360, saturation 0-100)
-        (read back as `hs_color`); `white=True`, the plain white of a colour
-        light without adjustable temperature.
+        off. At most one of: `color_temp_kelvin`, white of that temperature;
+        `hs_color`, a colour as (hue 0-360, saturation 0-100); `white=True`,
+        the plain white of a colour light without adjustable temperature.
 
         Raises TuyaError if the light lacks what is asked for, and ValueError
         for a value of the wrong shape or out of range.
         """
         if not isinstance(white, bool):
             raise ValueError("white is True or False; give its level as brightness")
-        wanted = {"hs": hs is not None, "color_temp": kelvin is not None, "white": white}
+        wanted = {
+            "hs": hs_color is not None,
+            "color_temp": color_temp_kelvin is not None,
+            "white": white,
+        }
         asked = [mode for mode, given in wanted.items() if given]
         if len(asked) > 1:
-            raise ValueError("give only one of kelvin, hs and white")
+            raise ValueError("give only one of color_temp_kelvin, hs_color and white")
         if asked and asked[0] not in self.supported_color_modes:
             raise TuyaError(f"{self.device.name} has no {_LACKING[asked[0]]}")
         if brightness is not None and not 0 <= brightness <= 255:
             raise ValueError("brightness is 0 to 255")
-        if hs is not None and not (len(hs) == 2 and 0 <= hs[0] <= 360 and 0 <= hs[1] <= 100):
-            raise ValueError("hs is (hue 0-360, saturation 0-100)")
+        if hs_color is not None and not (
+            len(hs_color) == 2 and 0 <= hs_color[0] <= 360 and 0 <= hs_color[1] <= 100
+        ):
+            raise ValueError("hs_color is (hue 0-360, saturation 0-100)")
         if brightness == 0:
             self.turn_off()
             return
 
         setting: dict[str, Any] = {"switch": True}
         colour: list[dict[str, Any]] = []
-        to_white = white or kelvin is not None
+        to_white = white or color_temp_kelvin is not None
         if to_white:
             setting["color_mode"] = "white"
-        if kelvin is not None:
-            setting["color_temp"] = kelvin
+        if color_temp_kelvin is not None:
+            setting["color_temp"] = color_temp_kelvin
         # Brightness belongs to the colour while one is showing.
-        if hs is not None or (brightness is not None and not to_white and self.in_color_mode):
+        if hs_color is not None or (brightness is not None and not to_white and self.in_color_mode):
             if brightness is None:
                 brightness = 255 if self.brightness is None else self.brightness
             setting["color_mode"] = "colour"
             # Not through `commands`, which checks ranges: what is kept of the current
             # colour goes back as read, also from a device that misreports its scale.
             colour = self.wrappers["color_data"].get_update_commands(
-                self.device.info, (*(hs or self.hs_color or (0, 0)), brightness)
+                self.device.info, (*(hs_color or self.hs_color or (0, 0)), brightness)
             )
         elif "brightness" in self.wrappers:
             if brightness is None and white:
