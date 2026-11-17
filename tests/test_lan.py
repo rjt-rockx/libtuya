@@ -180,6 +180,24 @@ def test_a_device_with_a_new_address_is_found_again(make_device, tuya, monkeypat
         assert Tuya(tuya.home).device(PLUG).address == current  # and it was saved
 
 
+def test_a_held_sub_device_connection_follows_its_gateway(make_device, tuya, monkeypatch):
+    tuya.cloud_fallback = False
+    before, after = {"node-1": dict(PLUG_DPS)}, {"node-1": PLUG_DPS | {"1": True}}
+    with (
+        fake(GATEWAY, "3.4", cids=before) as old_home,
+        fake(GATEWAY, "3.4", cids=after) as new_home,
+    ):
+        make_device(GATEWAY, LanAddress("127.0.0.1", "3.4", old_home.port))
+        child = make_device(PLUG, local_key=local_key(GATEWAY), node_id="node-1")
+        moved = LanAddress("127.0.0.1", "3.4", new_home.port)
+        monkeypatch.setattr(client_module, "discover", lambda keys, timeout: {GATEWAY: moved})
+        with child.connected():
+            assert child.refresh()["switch_1"] is False  # through the gateway at its old address
+            old_home.stop()  # which then turns up at another
+            assert child.refresh()["switch_1"] is True
+            assert child.transport == "lan"
+
+
 def test_watching_pushes(plug):
     device, on_the_wire = plug
     energy = device.entity("sensor.add_ele")

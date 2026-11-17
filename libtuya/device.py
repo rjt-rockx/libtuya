@@ -332,6 +332,9 @@ class Device:
             self._may_relocate = False
             if not self._client._relocate(self):
                 raise
+            # A connection still held here (a sub-device's, through its gateway) leads
+            # to the old address.
+            self._drop_connection()
             result = call(self._lan_connection())
         self._may_relocate = True
         return result
@@ -339,7 +342,13 @@ class Device:
     def _moved(self, address: LanAddress | None) -> None:
         """Record a new LAN address."""
         self.address = address
-        self._connection = None
+        self._drop_connection()
+
+    def _drop_connection(self) -> None:
+        with self._connection_lock:
+            stale, self._connection = self._connection, None
+        if stale is not None:
+            stale.close()
 
     def _merge_cloud(self, current: dict[str, Any]) -> None:
         """Take over `online` and `status` as the cloud just reported them."""
