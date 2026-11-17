@@ -10,8 +10,8 @@ a live account or physical devices.
 | | [Home Assistant `tuya`][ha] | [localtuya] | [hass-localtuya] | [tuya-local] | [TinyTuya] | libtuya |
 |---|---|---|---|---|---|---|
 | Runs without Home Assistant | no | no | no | no | yes | yes |
-| Works without a Tuya developer account | yes (QR login) | keys typed in by hand | keys typed in by hand | yes (QR login with Home Assistant's client id) | keys supplied by hand | yes (QR login with Home Assistant's client id) |
-| Local keys come from | not used | developer API or manual | developer API or manual | QR login or manual | wizard using the developer API | QR login |
+| Works without a Tuya developer account | yes (QR login) | keys typed in by hand | keys typed in by hand | yes (QR login with Home Assistant's client id) | keys supplied by hand | yes (QR login with Home Assistant's client id); a developer project also works |
+| Local keys come from | not used | developer API or manual | developer API or manual | QR login or manual | wizard using the developer API | QR login or developer API |
 | What gives datapoints meaning | cloud codes per category, plus product fixes | you configure each entity | category tables plus the developer API's dp map, else by hand | a database of 1,790 device files, matched by product id or datapoints | raw datapoints; classes for bulbs, covers and 15 contributed device types | Home Assistant's category tables and product fixes, mapped to dp ids by the cloud's own map |
 | Control path | cloud | LAN | LAN | LAN | LAN, or cloud via the developer API | LAN, cloud fallback |
 | Uses the cloud once set up | always | no | no | no | no | optionally: fallback, writes with no local form, scenes, push |

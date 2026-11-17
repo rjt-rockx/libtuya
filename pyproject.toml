@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "libtuya"
 version = "2.0.0"
-description = "Control Tuya devices locally from Python: Smart Life QR login, Home Assistant's device knowledge, TinyTuya on the LAN"
+description = "Control Tuya devices locally from Python, with Home Assistant's device knowledge: Smart Life QR or developer-project login, TinyTuya on the LAN"
 readme = "README.md"
 license = "MIT AND Apache-2.0"
 license-files = ["LICENSE", "NOTICE.md", "third_party/home-assistant-core/LICENSE.md"]

@@ -90,4 +90,10 @@ Scenes, push updates and the cloud fallback use the same session later.
   same account is unknown.** If Home Assistant asks you to re-authenticate
   after you log in here, that is the likely cause.
 - **Tuya has replaced this API twice in eight years.** If it does so again,
-  the keys and datapoint maps in `devices.json` remain usable on the LAN.
+  the keys and datapoint maps in `devices.json` remain usable on the LAN, and
+  a developer project (`tuya login --access-id ...`, see the README) is a
+  second way in that does not depend on Home Assistant's client id.
+
+Requests time out after 5 s connecting and 30 s waiting for an answer, the
+user code is stripped and URL-quoted before the SDK puts it in a URL, and a
+network error names the host it could not reach.

@@ -26,7 +26,8 @@ them so that one QR-code login is enough to control devices locally.
 | Module | Responsibility |
 |---|---|
 | `client.py` | `Tuya`: the saved login, the saved device list, finding a device by name, LAN scans. The only module that touches disk. |
-| `cloud.py` | Everything that talks to Tuya's servers, through tuya-device-sharing-sdk. Turns the SDK's device objects into plain records for the cache and back. |
+| `cloud.py` | Everything the QR login sends to Tuya's servers, through tuya-device-sharing-sdk. Turns the SDK's device objects into plain records for the cache and back. One lock around every request (the SDK renews its token without one). |
+| `developer.py` | The same for a Tuya developer project, through TinyTuya's `Cloud`, producing the same records. |
 | `lan.py` | Discovery by device id and a `Connection` that wraps one TinyTuya session: explicit errors, a lock, the device22 and protocol 3.2 special cases. |
 | `dpmap.py` | Translation between LAN datapoints (`{"20": true}`) and cloud status (`{"switch_led": true}`), in both directions. |
 | `device.py` | `Device`: holds the status, picks the transport, builds entities. |
@@ -58,8 +59,20 @@ The SDK drops a device's whole map if a single datapoint cannot be pushed in
 dp-id form. That limitation is about MQTT, not the LAN, so `cloud.py` fetches
 the map itself in that case.
 
+Values the device did not report are skipped, not decoded: the SDK's
+conversions would turn a missing, empty or unknown enumeration value into the
+first value the datapoint can take.
+
+A developer project's API (`developer.py`) speaks the same cloud vocabulary
+but does not publish the conversions. It is asked for the device's own
+description ("thing model") as well, and a datapoint is mapped for the LAN
+only where that confirms the same type and range, or where a colour's
+saturation range names one of the SDK's two colour encodings. Everything
+else goes through the cloud.
+
 Because every transport ends up writing the same `status` dictionary in cloud
-terms, everything above `device.py` is unaware of how a value arrived.
+terms, everything above `device.py` is unaware of how a value arrived, and of
+which kind of login listed the device.
 
 ## Entities
 
@@ -117,6 +130,13 @@ guessing: an argument a device cannot use raises `TuyaError`, a bad value
   sub-devices of a gateway share the gateway's connection.
 - **Replies are merged, never trusted as snapshots.** Devices answer with
   whatever changed, and TinyTuya does not match replies to requests.
+- **A write is sent once.** A refusal comes back as an error reply and goes
+  to the cloud; the return code in an acknowledgement is not a refusal (Tuya's
+  open device code sends 1 for success). A write that may have arrived
+  unacknowledged raises instead of being repeated through the cloud.
+- **A refresh keeps what only the saved list has**: LAN addresses, a
+  device's description when the cloud fails to give it this time, and the
+  whole list when the cloud answers with none.
 
 ## Why synchronous
 

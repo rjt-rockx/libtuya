@@ -31,13 +31,20 @@ Installed from PyPI, not copied.
 
 | Project | Licence | Role |
 |---|---|---|
-| [TinyTuya](https://github.com/jasonacox/tinytuya) | MIT | The LAN protocol: discovery and protocol versions 3.1 to 3.5 |
+| [TinyTuya](https://github.com/jasonacox/tinytuya) | MIT | The LAN protocol: discovery and protocol versions 3.1 to 3.5; signed requests to a developer project's cloud API |
 | [tuya-device-sharing-sdk](https://github.com/tuya/tuya-device-sharing-sdk) | MIT | Smart Life QR login, device list, value conversions |
 | [tuya-device-handlers](https://github.com/home-assistant-libs/tuya-device-handlers) | MIT | Reading and writing datapoints in friendly units, per-product fixes |
 | [qrcode](https://github.com/lincolnloop/python-qrcode) | BSD | Drawing the login QR code in the terminal |
 | [cryptography](https://github.com/pyca/cryptography) | Apache-2.0 or BSD | Needed by the sharing SDK and TinyTuya |
 
 ## Studied, nothing copied
+
+- [TuyaOpen](https://github.com/tuya/TuyaOpen) (Apache-2.0), Tuya's open
+  device code, showed how a device acknowledges a command.
+- Tuya's error-code table in
+  [tuya-home-assistant](https://github.com/tuya/tuya-home-assistant) (MIT) and
+  TinyTuya's documentation gave the meanings behind the hints in
+  `libtuya/developer.py`.
 
 - [tuya-local](https://github.com/make-all/tuya-local) (MIT) showed that the
   Smart Life QR login can supply local keys for LAN control, and its device

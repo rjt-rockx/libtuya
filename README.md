@@ -17,7 +17,7 @@ heater.set_temperature(21.5)
 print(heater.current_temperature, heater.hvac_modes)
 ```
 
-Log in once with the phone app. From then on
+Log in once with the phone app (or a Tuya developer project). From then on
 your devices are controlled directly over the LAN, by name, through entities
 that behave like Home Assistant's: a light has `brightness` and `hs_color`,
 a thermostat `hvac_mode` and `set_temperature()`, a blind
@@ -30,7 +30,7 @@ libtuya is glue between three projects and adds as little as it can:
 |---|---|---|
 | Account access | [tuya-device-sharing-sdk] | QR-code login with the phone app, the device list, each device's local key and its datapoint map; scenes and cloud push |
 | Device knowledge | [Home Assistant]'s Tuya integration and [tuya-device-handlers] | Which datapoints form a light, a thermostat or a sensor, how their values scale, fixes for products that misreport themselves, and how each kind of entity behaves |
-| Local control | [TinyTuya] | Discovery and the LAN protocol, versions 3.1 to 3.5 |
+| Local control | [TinyTuya] | Discovery and the LAN protocol, versions 3.1 to 3.5; a developer project's cloud API |
 
 > **Status.** Version 2.0 is a rewrite. It is tested against a simulated
 > device that speaks the real LAN protocol, against a fake of Tuya's cloud
@@ -48,11 +48,11 @@ pip install git+https://github.com/rjt-rockx/libtuya.git
 
 ## Log in
 
-Logging in stores a session in `~/.libtuya` (or `$LIBTUYA_HOME`, or the
+Either way of logging in stores a session in `~/.libtuya` (or `$LIBTUYA_HOME`, or the
 directory passed as `Tuya(home)`), saves the device list with each device's
 local key, and looks for the devices on the LAN.
 
-With the Smart Life or Tuya Smart app (no developer account needed):
+**With the Smart Life or Tuya Smart app** (no developer account needed):
 
 ```bash
 tuya login
@@ -71,6 +71,15 @@ From Python, `show_qr` receives the text to show as a QR code:
 tuya.login("your-user-code", show_qr=print)
 tuya.devices(refresh=True)
 ```
+
+**With a Tuya developer project**, if you already have one (TinyTuya's
+wizard and localtuya use them) and your app account is linked to it:
+
+```bash
+tuya login --access-id ID --region eu --uid APP_ACCOUNT_UID
+```
+
+See [With a developer project](#with-a-developer-project).
 
 ## Using the library
 
@@ -228,6 +237,47 @@ tuya locate lamp 192.168.4.20
 Every command takes `--json`; `tuya --local ...` never uses the cloud; `-v`
 shows what happens.
 
+## With a developer project
+
+If you use TinyTuya or localtuya you may already have a cloud project on
+Tuya's IoT Platform. libtuya can log in with it instead of the app:
+
+```bash
+tuya login --access-id ID --region eu --uid APP_ACCOUNT_UID   # the Access Secret is asked for
+tuya login --access-id ID --region eu --device-id ANY_DEVICE_ID
+```
+
+```python
+tuya.login_developer("access-id", "access-secret", "eu", uid="...")  # or device_id="..."
+```
+
+What the project needs, as TinyTuya's README describes it: a cloud project
+on [iot.tuya.com](https://iot.tuya.com/) in the data centre of your app
+account (not always the obvious one), your app account linked to it
+(*Devices* > *Link Tuya App Account*), and the *IoT Core* and
+*Authorization* services subscribed under *Service API*. IoT Core is a free
+trial that has to be extended every few months. Regions are `cn`, `us`,
+`us-e`, `eu`, `eu-w`, `in` and `sg`. The UID is shown with the linked
+account; `--device-id` with any one of your devices finds it instead.
+
+From `tinytuya.json`: `apiKey` is the Access ID, `apiSecret` the Access
+Secret, `apiRegion` the region, and any device id in it works as
+`--device-id`. Leave your products in Tuya's default instruction mode;
+"DP instruction" mode is not supported.
+
+Compared with the app login:
+
+- Scenes, cloud push (`subscribe`) and camera stream URLs are not available.
+- A datapoint is used on the LAN only where the device's own description
+  confirms its local form; check what was left out with
+  `tuya -v devices --refresh`. The rest is written through the cloud and
+  read from it when the device list is refreshed or the LAN fails.
+- Counters that report increments (energy) read as plain values.
+- Cloud requests count against the trial's quota: a refresh makes two per
+  kind of device, and a device that answers on the LAN makes none. TinyTuya
+  sends them without a timeout.
+- `logout` only deletes the saved files; the Access Secret stays valid.
+
 ## What to expect
 
 - **One connection per device.** Most devices accept a single LAN
@@ -264,7 +314,7 @@ shows what happens.
 | hass-localtuya | yes | for automatic keys and setup | local | category tables + the developer API's dp map |
 | tuya-local | yes | no | local | database of 1,790 device files |
 | TinyTuya | no | for its key wizard | local | raw datapoints; classes for some device types |
-| **libtuya** | no | no | local, cloud fallback | Home Assistant's tables, product fixes and entity behaviour |
+| **libtuya** | no | no (either works) | local, cloud fallback | Home Assistant's tables, product fixes and entity behaviour |
 
 More in [docs/comparison.md](docs/comparison.md), including where the others
 are stronger.
