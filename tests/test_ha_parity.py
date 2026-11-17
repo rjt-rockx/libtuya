@@ -12,10 +12,11 @@ from typing import Any
 import ha_snapshots
 import pytest
 from conftest import fixture_names, record
+from tuya_device_handlers import TUYA_QUIRKS_REGISTRY
 
 from libtuya import Device
 from libtuya import device as device_module
-from libtuya.entities import CLASSES, Entity
+from libtuya.entities import CLASSES, Entity, _tables
 
 
 def same(ours: Any, theirs: Any) -> bool:
@@ -42,8 +43,11 @@ def same(ours: Any, theirs: Any) -> bool:
 def test_summaries_match_home_assistant(platform, tuya, monkeypatch):
     if CLASSES[platform].summary is Entity.summary:
         pytest.skip("no behaviour of its own yet")
-    # The snapshots were recorded without product quirks.
+    # The snapshots were recorded without product quirks. Those patch a device
+    # when it is set up, and the types of its datapoints when they are looked up.
     monkeypatch.setattr(device_module, "apply_quirks", lambda info: None)
+    _tables()  # registers the quirks, so that only this test sees the registry empty
+    monkeypatch.setattr(TUYA_QUIRKS_REGISTRY, "_quirks", {})
     recorded = ha_snapshots.states(platform)
     compared, differences = 0, []
     for name in fixture_names():
