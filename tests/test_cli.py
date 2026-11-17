@@ -75,3 +75,5 @@ def test_listing_and_errors(run):
     status, out = run("set", "breaker", "sensor.cur_power", "5", "--json")
     assert status == 1 and "read-only" in json.loads(out)["error"]
     assert run("control", "breaker", "brightness", "50")[0] == 1  # a plug is not a light
+    assert run("control", "breaker", "open") == (1, "")
+    assert "has nothing that can open" in run.err

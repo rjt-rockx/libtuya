@@ -13,7 +13,13 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from . import Device, Entity, Light, Tuya, TuyaError, __version__
+from . import Climate, Device, Entity, Light, Tuya, TuyaError, __version__
+
+# `tuya control DEVICE ACTION` for these calls the entity method of the same name.
+_PLAIN_ACTIONS = (
+    "open", "close", "stop", "start", "pause", "return_to_base", "locate", "press",
+    "arm_home", "arm_away", "disarm", "trigger",
+)  # fmt: skip
 
 USER_CODE_HINT = "Smart Life or Tuya Smart app: Me > gear icon > Account and Security > User Code"
 
@@ -184,17 +190,51 @@ def control(tuya: Tuya, args: argparse.Namespace) -> Result:
             raise TuyaError(f"{chosen.id} is not a light")
         return chosen
 
+    def able_to(method: str) -> Any:
+        """The entity to act on: the one named, else the device's only one with `method`."""
+        if args.entity:
+            chosen = device.entity(args.entity)
+            if not callable(getattr(chosen, method, None)):
+                raise TuyaError(f"{chosen.id} cannot {action}")
+            return chosen
+        able = [e for e in device.entities if callable(getattr(e, method, None))]
+        if len(able) == 1:
+            return able[0]
+        if able:
+            raise TuyaError(
+                f"several entities can {action}; pick one with --entity: "
+                + ", ".join(e.id for e in able)
+            )
+        raise TuyaError(f"{device.name} has nothing that can {action}")
+
     def number() -> float:
         if value is None:
             raise TuyaError(f"`{action}` needs a value")
         return float(value)
 
+    def text() -> str:
+        if value is None:
+            raise TuyaError(f"`{action}` needs a value")
+        return value
+
     with device.connected():
         if action in ("on", "off"):
-            entity().set(switch=action == "on")
+            entity().turn_on() if action == "on" else entity().turn_off()
         elif action == "toggle":
             device.refresh()
-            entity().set(switch=not entity().value)
+            entity().turn_off() if entity().value else entity().turn_on()
+        elif action in _PLAIN_ACTIONS:
+            getattr(able_to(action), action)()
+        elif action == "position":
+            able_to("set_position").set_position(round(number()))
+        elif action == "mode":
+            able_to("set_hvac_mode").set_hvac_mode(text())
+        elif action == "preset":
+            able_to("set_preset_mode").set_preset_mode(text())
+        elif action == "speed":
+            able_to("set_percentage").set_percentage(number())
+        elif action == "humidity":
+            able_to("set_humidity").set_humidity(round(number()))
         elif action == "brightness":
             if not 0 <= (percent := number()) <= 100:
                 raise TuyaError("brightness is a percentage, 0 to 100")
@@ -209,9 +249,9 @@ def control(tuya: Tuya, args: argparse.Namespace) -> Result:
             light().turn_on(hs_color=(hue * 360, saturation * 100), brightness=brightness * 255)
         elif action == "temperature":
             # Degrees for a thermostat; kelvin for a light, or when a light is named.
-            climate = [e for e in device.entities if e.platform == "climate"]
+            climate = [e for e in device.entities if isinstance(e, Climate)]
             if climate and not args.entity:
-                climate[0].set(set_temperature=number())
+                climate[0].set_temperature(number())
             else:
                 light().turn_on(color_temp_kelvin=round(number()))
         else:
@@ -353,14 +393,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     command = add("info", info, "Read a device and show its entities")
     command.add_argument("device", help=device_help)
-    command = add(
-        "control", control, "Switch a device, or set a light's brightness, color or temperature"
-    )
+    command = add("control", control, "Switch, dim, open, start ... a device the way its app would")
     command.add_argument("device", help=device_help)
     command.add_argument(
         "action",
-        help="on, off, toggle, status, brightness PERCENT, color RRGGBB, "
-        "temperature DEGREES (thermostat) or KELVIN (light)",
+        help="on, off, toggle, status; brightness PERCENT, color RRGGBB, "
+        "temperature DEGREES (thermostat) or KELVIN (light); open, close, stop, "
+        "position PERCENT; mode HVAC_MODE, preset NAME, speed PERCENT, humidity PERCENT; "
+        "start, pause, return_to_base, locate; press; arm_home, arm_away, disarm, trigger",
     )
     command.add_argument("value", nargs="?")
     command.add_argument(
