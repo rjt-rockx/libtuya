@@ -217,8 +217,15 @@ class Device:
 
         Without it every call connects anew, which is gentle on a device's
         single connection slot but, done in quick succession, has been reported
-        to make some devices stop answering.
+        to make some devices stop answering. For a sub-device it is its
+        gateway's connection that is held, shared with the gateway's other
+        sub-devices: most gateways accept only one.
         """
+        gateway = self._client.gateway_of(self)
+        if gateway is not None:
+            with gateway.connected():
+                yield
+            return
         with self._connection_lock:
             self._holders += 1
             if self._holders == 1:  # an outer block's connection is shared, not replaced
